@@ -9,3 +9,8 @@ fastcrypto-derive/Cargo.lock
 .DS_Store
 
 .idea
+
+build
+.gradle
+.kotlin
+kotlin/local.properties

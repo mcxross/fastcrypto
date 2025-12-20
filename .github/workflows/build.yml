@@ -1,0 +1,127 @@
+name: Kotlin Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+  build:
+    name: Kotlin Build
+    runs-on: macos-latest
+
+    defaults:
+      run:
+        working-directory: kotlin
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'adopt'
+
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
+        shell: bash
+
+      - name: Resolve Zig download (pinned)
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          version = "0.15.2"
+          with urllib.request.urlopen("https://ziglang.org/download/index.json") as resp:
+              data = json.load(resp)
+
+          arch = os.uname().machine
+          zig_arch = "aarch64" if arch == "arm64" else "x86_64"
+          key = f"{zig_arch}-macos"
+          tarball = data[version][key]["tarball"]
+          filename = tarball.rsplit("/", 1)[-1]
+          dirname = filename[:-7] if filename.endswith(".tar.xz") else filename
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"ZIG_URL={tarball}\n")
+              f.write(f"ZIG_DIR={dirname}\n")
+          PY
+        shell: bash
+
+      - name: Install Zig for cross-linking
+        run: |
+          curl -fL "$ZIG_URL" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/$ZIG_DIR" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Configure Cargo cross-linking via Zig
+        run: |
+          {
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=zig"
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=x86_64-linux-gnu"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=zig"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=aarch64-linux-gnu"
+            echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=zig"
+            echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=x86_64-windows-gnu"
+          } >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Configure Zig CC wrappers
+        run: |
+          set -euo pipefail
+          WRAPPER_DIR="${RUNNER_TEMP}/zig-cc"
+          mkdir -p "$WRAPPER_DIR"
+
+          cat > "${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu" <<'SH'
+          #!/usr/bin/env bash
+          exec zig cc -target aarch64-linux-gnu "$@"
+          SH
+
+          cat > "${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu" <<'SH'
+          #!/usr/bin/env bash
+          exec zig cc -target x86_64-linux-gnu "$@"
+          SH
+
+          cat > "${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu" <<'SH'
+          #!/usr/bin/env bash
+          exec zig cc -target x86_64-windows-gnu "$@"
+          SH
+
+          chmod +x "${WRAPPER_DIR}/zig-cc-"*
+
+          {
+            echo "CC_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
+            echo "CXX_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
+            echo "CC_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
+            echo "CXX_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
+            echo "CC_x86_64_pc_windows_gnu=${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu"
+            echo "CXX_x86_64_pc_windows_gnu=${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu"
+          } >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Cache Konan
+        uses: ./.github/actions/cache-konan
+
+      - name: Cache Gradle
+        uses: ./.github/actions/cache-gradle
+
+      - name: Grant Permission to Execute Gradle
+        run: chmod +x ./gradlew
+        shell: bash
+
+      - name: Build with Gradle
+        run: ./gradlew :lib:jvmTest
+        shell: bash

@@ -1,0 +1,24 @@
+[package]
+name = "fastkrypto_uniffi"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+description = "UniFFI exports for fastcrypto"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+path = "src/commonMain/rust/lib.rs"
+
+[dependencies]
+fastcrypto = { path = "../../fastcrypto" }
+rand = { version = "0.8.5", features = ["std"] }
+thiserror = "1.0.38"
+uniffi = "0.29.4"
+zeroize = "1.5.7"
+bip39 = { version = "1.2.0", features = ["rand"] }
+hmac = "0.12.1"
+sha2 = "0.10.8"
+k256 = { version = "0.13.3", features = ["arithmetic"] }
+subtle = "2.5.0"
