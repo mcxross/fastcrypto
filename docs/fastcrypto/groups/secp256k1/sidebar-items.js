@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["POINT_SIZE_IN_BYTES","SCALAR_SIZE_IN_BYTES"],"mod":["schnorr"],"struct":["FQ_MODULUS","FR_MODULUS","ProjectivePoint","Scalar"]};

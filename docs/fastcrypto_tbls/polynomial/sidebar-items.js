@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["EvalRange","Poly"],"type":["Eval","PrivatePoly","PublicPoly"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["hash_prime","jacobi","parameterized_group"]};

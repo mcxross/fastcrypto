@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PRIVATE_KEY_SIZE_IN_BYTES","PUBLIC_KEY_SIZE_IN_BYTES","SIGNATURE_SIZE_IN_BYTES"],"enum":["Tag"],"fn":["bip0340_hash_to_scalar"],"struct":["SchnorrPrivateKey","SchnorrPublicKey","SchnorrSignature"]};
