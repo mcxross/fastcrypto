@@ -71,17 +71,32 @@ jobs:
 
           cat > "${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu" <<'SH'
           #!/usr/bin/env bash
-          exec zig cc -target aarch64-linux-gnu "$@"
+          args=()
+          for arg in "$@"; do
+              [[ $arg == --target=* ]] && continue
+              args+=("$arg")
+          done
+          exec zig cc -target aarch64-linux-gnu "${args[@]}"
           SH
 
           cat > "${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu" <<'SH'
           #!/usr/bin/env bash
-          exec zig cc -target x86_64-linux-gnu "$@"
+          args=()
+          for arg in "$@"; do
+              [[ $arg == --target=* ]] && continue
+              args+=("$arg")
+          done
+          exec zig cc -target x86_64-linux-gnu "${args[@]}"
           SH
 
           cat > "${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu" <<'SH'
           #!/usr/bin/env bash
-          exec zig cc -target x86_64-windows-gnu "$@"
+          args=()
+          for arg in "$@"; do
+              [[ $arg == --target=* ]] && continue
+              args+=("$arg")
+          done
+          exec zig cc -target x86_64-windows-gnu "${args[@]}"
           SH
 
           chmod +x "${WRAPPER_DIR}/zig-cc-"*
