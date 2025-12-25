@@ -700,3 +700,4 @@ pub fn hkdf_sha3_256_expand(
     let ikm = HkdfIkm::from_bytes(&ikm)?;
     Ok(hkdf_sha3_256(&ikm, &salt, &info, output_length as usize)?)
 }
+mod seal;

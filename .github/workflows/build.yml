@@ -33,7 +33,7 @@ jobs:
           distribution: 'adopt'
 
       - name: Install Rust targets
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
         shell: bash
 
       - name: Resolve Zig download (pinned)
@@ -67,18 +67,6 @@ jobs:
           echo "$PWD/$ZIG_DIR" >> "$GITHUB_PATH"
         shell: bash
 
-      - name: Configure Cargo cross-linking via Zig
-        run: |
-          {
-            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=zig"
-            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=x86_64-linux-gnu"
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=zig"
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=aarch64-linux-gnu"
-            echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=zig"
-            echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=x86_64-windows-gnu"
-          } >> "$GITHUB_ENV"
-        shell: bash
-
       - name: Configure Zig CC wrappers
         run: |
           set -euo pipefail
@@ -87,17 +75,22 @@ jobs:
 
           cat > "${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu" <<'SH'
           #!/usr/bin/env bash
-          exec zig cc -target aarch64-linux-gnu "$@"
+          args=()
+          for arg in "$@"; do
+              [[ $arg == --target=* ]] && continue
+              args+=("$arg")
+          done
+          exec zig cc -target aarch64-linux-gnu "${args[@]}"
           SH
 
           cat > "${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu" <<'SH'
           #!/usr/bin/env bash
-          exec zig cc -target x86_64-linux-gnu "$@"
-          SH
-
-          cat > "${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu" <<'SH'
-          #!/usr/bin/env bash
-          exec zig cc -target x86_64-windows-gnu "$@"
+          args=()
+          for arg in "$@"; do
+              [[ $arg == --target=* ]] && continue
+              args+=("$arg")
+          done
+          exec zig cc -target x86_64-linux-gnu "${args[@]}"
           SH
 
           chmod +x "${WRAPPER_DIR}/zig-cc-"*
@@ -105,10 +98,13 @@ jobs:
           {
             echo "CC_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
             echo "CXX_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=aarch64-linux-gnu"
+
             echo "CC_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
             echo "CXX_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
-            echo "CC_x86_64_pc_windows_gnu=${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu"
-            echo "CXX_x86_64_pc_windows_gnu=${WRAPPER_DIR}/zig-cc-x86_64-windows-gnu"
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
+            echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=x86_64-linux-gnu"
           } >> "$GITHUB_ENV"
         shell: bash
 

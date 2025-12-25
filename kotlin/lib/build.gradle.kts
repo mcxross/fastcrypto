@@ -16,7 +16,7 @@ plugins {
 }
 
 group = (project.findProperty("fastkrypto.group") as String?) ?: "xyz.mcxross.fastkrypto"
-version = (project.findProperty("fastkrypto.version") as String?) ?: "0.1.0"
+version = (project.findProperty("fastkrypto.version") as String?) ?: "0.2.0-SNAPSHOT"
 
 uniffi {
     generateFromLibrary {
@@ -80,7 +80,6 @@ val jvmNativeTargets = listOf(
     "x86_64-apple-darwin",
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
-    "x86_64-pc-windows-gnu",
 )
 
 val jvmNativeResourceDirs = mapOf(
@@ -88,7 +87,6 @@ val jvmNativeResourceDirs = mapOf(
     "x86_64-apple-darwin" to "darwin-x86-64",
     "aarch64-unknown-linux-gnu" to "linux-aarch64",
     "x86_64-unknown-linux-gnu" to "linux-x86-64",
-    "x86_64-pc-windows-gnu" to "win32-x86-64",
 )
 
 val jvmNativeLibNames = mapOf(
@@ -96,7 +94,6 @@ val jvmNativeLibNames = mapOf(
     "x86_64-apple-darwin" to "libfastkrypto_uniffi.dylib",
     "aarch64-unknown-linux-gnu" to "libfastkrypto_uniffi.so",
     "x86_64-unknown-linux-gnu" to "libfastkrypto_uniffi.so",
-    "x86_64-pc-windows-gnu" to "fastkrypto_uniffi.dll",
 )
 
 fun hostRustTarget(): String {
