@@ -16,15 +16,6 @@ function is_release_commit() {
   fi
 }
 
-function contains_snapshot() {
-  commit_message=$(git log --oneline --format=%B -n 1 ${1} | head -n 1)
-  if [[ "${commit_message}" == *"SNAPSHOT"* ]]; then
-    return 0
-  else
-    return 1
-  fi
-}
-
 # Let's roll
 git_head_commit=$(git rev-parse HEAD)
 git_last_merge_commit=$(git log -1 --format=%H --merges)
@@ -42,14 +33,7 @@ if [[ ${git_head_commit} == "${git_last_merge_commit}" ]]; then
       safe git checkout "${commit}"
       # Ensure we have perms
       safe chmod +x ./gradlew
-      safe ./gradlew generateApolloSources
-      if contains_snapshot "${commit}"; then
-        approve "Snapshot release, publishing to snapshot repo..."
-        safe ./gradlew publishToMavenCentral
-      else
-        approve "Release release, publishing to central repo..."
-        safe ./gradlew publishAndReleaseToMavenCentral --no-configuration-cache
-      fi
+      safe ./gradlew publishAndReleaseToMavenCentral --no-configuration-cache
       safe git checkout "${git_head_commit}"
       exit 0
     fi
@@ -57,14 +41,7 @@ if [[ ${git_head_commit} == "${git_last_merge_commit}" ]]; then
 elif is_release_commit "${git_head_commit}"; then
   approve "Release commit found at HEAD (${git_head_commit}), publishing..."
   safe chmod +x ./gradlew
-  safe ./gradlew generateApolloSources
-  if contains_snapshot "${git_head_commit}"; then
-    approve "Snapshot release, publishing to snapshot repo..."
-    safe ./gradlew publishToMavenCentral
-  else
-    approve "Release release, publishing to central repo..."
-    safe ./gradlew publishAndReleaseToMavenCentral --no-configuration-cache
-  fi
+  safe ./gradlew publishAndReleaseToMavenCentral --no-configuration-cache
   exit 0
 fi
 
