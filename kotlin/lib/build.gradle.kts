@@ -126,17 +126,7 @@ val configuredJvmTargets = providers.gradleProperty("fastkrypto.jvmNativeTargets
             .map { it.trim() }
             .filter { it.isNotEmpty() }
     }
-    .orElse(
-        providers.environmentVariable("CI")
-            .map { ci ->
-                if (ci.equals("true", ignoreCase = true) || ci == "1") {
-                    jvmNativeTargets
-                } else {
-                    listOf(hostRustTarget())
-                }
-            }
-            .orElse(listOf(hostRustTarget()))
-    )
+    .orElse(jvmNativeTargets)
 
 val buildJvmNativeLibs = tasks.register<BuildJvmNativeLibsTask>("buildJvmNativeLibs") {
     group = "build"
