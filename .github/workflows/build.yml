@@ -119,5 +119,5 @@ jobs:
         shell: bash
 
       - name: Build with Gradle
-        run: ./gradlew :lib:jvmTest
+        run: ./gradlew :lib:jvmTest :lib:cargoBuildLinuxX64Debug :lib:cargoBuildLinuxArm64Debug
         shell: bash

@@ -97,5 +97,7 @@ jobs:
         working-directory: kotlin
       - name: Publish to Sonatype (Maven Central)
         shell: bash
-        run: ../scripts/release
+        run: |
+          ./gradlew :lib:cargoBuildLinuxX64Debug :lib:cargoBuildLinuxArm64Debug
+          ../scripts/release
         working-directory: kotlin

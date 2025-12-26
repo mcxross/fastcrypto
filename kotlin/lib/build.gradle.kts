@@ -5,6 +5,7 @@ import fastkrypto.buildlogic.BuildJvmNativeLibsTask
 import fastkrypto.buildlogic.PrepareJvmNativeResourcesTask
 import org.gradle.internal.os.OperatingSystem
 import java.io.File
+import gobley.gradle.cargo.tasks.CargoTask
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -45,6 +46,8 @@ kotlin {
     iosSimulatorArm64()
     macosX64()
     macosArm64()
+    linuxX64()
+    linuxArm64()
 
     sourceSets {
         val commonTest by getting {
@@ -55,9 +58,11 @@ kotlin {
     }
 
     targets.withType<org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget>().configureEach {
-        binaries.framework {
-            baseName = "FastKrypto"
-            isStatic = true
+        if (konanTarget.family.isAppleFamily) {
+            binaries.framework {
+                baseName = "FastKrypto"
+                isStatic = true
+            }
         }
     }
 
@@ -169,6 +174,22 @@ tasks.named("jvmProcessResources") {
 
 tasks.named<org.gradle.jvm.tasks.Jar>("jvmJar") {
     dependsOn(prepareJvmNativeResources)
+}
+
+val zigWrapperDir = layout.projectDirectory.dir(".cargo")
+val zigAarch64WrapperName = providers.provider { "zig-cc-aarch64-linux-gnu" }
+val zigX86WrapperName = providers.provider { "zig-cc-x86_64-linux-gnu" }
+
+tasks.withType<CargoTask>().configureEach {
+    additionalEnvironmentPath.add(zigWrapperDir.asFile)
+    additionalEnvironment.put("CC_aarch64_unknown_linux_gnu", zigAarch64WrapperName)
+    additionalEnvironment.put("CXX_aarch64_unknown_linux_gnu", zigAarch64WrapperName)
+    additionalEnvironment.put("CC_x86_64_unknown_linux_gnu", zigX86WrapperName)
+    additionalEnvironment.put("CXX_x86_64_unknown_linux_gnu", zigX86WrapperName)
+    additionalEnvironment.put("CC_aarch64-unknown-linux-gnu", zigAarch64WrapperName)
+    additionalEnvironment.put("CXX_aarch64-unknown-linux-gnu", zigAarch64WrapperName)
+    additionalEnvironment.put("CC_x86_64-unknown-linux-gnu", zigX86WrapperName)
+    additionalEnvironment.put("CXX_x86_64-unknown-linux-gnu", zigX86WrapperName)
 }
 
 cargo {

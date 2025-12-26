@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+args=()
+for arg in "$@"; do
+    [[ $arg == --target=* ]] && continue
+    args+=("$arg")
+done
+
+exec zig cc -target x86_64-linux-gnu "${args[@]}"
