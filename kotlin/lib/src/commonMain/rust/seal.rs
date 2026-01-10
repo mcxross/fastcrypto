@@ -8,7 +8,6 @@ use std::ptr;
 const DST_POP: &[u8] = b"SUI-SEAL-IBE-BLS12381-POP-00";
 const BLS_SIG_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
 const DST_ID: &[u8] = b"SUI-SEAL-IBE-BLS12381-00";
-const BLS_RO_DST: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_";
 const DST_KDF: &[u8] = b"SUI-SEAL-IBE-BLS12381-H2-00";
 const DST_DERIVE_KEY: &[u8] = b"SUI-SEAL-IBE-BLS12381-H3-00";
 
@@ -30,14 +29,15 @@ fn hash_to_g1(id: &[u8]) -> blst_p1 {
             &mut p1,
             msg.as_ptr(),
             msg.len(),
-            BLS_RO_DST.as_ptr(),
-            BLS_RO_DST.len(),
+            BLS_SIG_DST.as_ptr(),
+            BLS_SIG_DST.len(),
             ptr::null(),
-            0
+            0,
         );
     }
     p1
 }
+
 
 fn sha3_256(data: &[&[u8]]) -> Vec<u8> {
     let mut hasher = Sha3_256::new();
