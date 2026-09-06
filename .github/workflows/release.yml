@@ -23,6 +23,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Set up Rust 1.96.1
+        uses: dtolnay/rust-toolchain@1.96.1
       - name: Install Rust targets
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
       - name: Resolve Zig download (pinned)
