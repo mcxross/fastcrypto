@@ -3,6 +3,7 @@ import fastkrypto.buildlogic.PrepareJvmNativeResourcesTask
 import gobley.gradle.cargo.dsl.linux
 import gobley.gradle.cargo.dsl.mingw
 import gobley.gradle.cargo.tasks.CargoTask
+import gobley.gradle.rust.dsl.RustExtension
 import java.io.File
 import org.gradle.internal.os.OperatingSystem
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -10,6 +11,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
   alias(libs.plugins.kotlinMultiplatform)
   alias(libs.plugins.androidLibrary)
+  id("dev.gobley.rust")
   alias(libs.plugins.gobleyCargo)
   alias(libs.plugins.gobleyUniffi)
   alias(libs.plugins.kotlinAtomicfu)
@@ -135,23 +137,38 @@ val configuredJvmTargets =
     }
     .orElse(jvmNativeTargets)
 
+// Gobley otherwise discovers the first `cargo` binary on PATH. That can bypass the
+// workspace's rust-toolchain file when a system Cargo is also installed. Resolve
+// through Rustup so its selected toolchain is used consistently for metadata,
+// UniFFI generation, and the JVM-native library build.
+val resolvedCargoPath =
+  providers
+    .gradleProperty("fastkrypto.cargoPath")
+    .orElse(
+      providers
+        .exec {
+          workingDir = rootProject.projectDir.parentFile
+          commandLine("rustup", "which", "cargo")
+        }
+        .standardOutput
+        .asText
+        .map { it.trim() }
+    )
+
+val resolvedRustcPath = resolvedCargoPath.map { File(it).parentFile.resolve("rustc").absolutePath }
+
+extensions.configure<RustExtension> {
+  toolchainDirectory.set(resolvedCargoPath.map { File(it).parentFile })
+}
+
 val buildJvmNativeLibs =
   tasks.register<BuildJvmNativeLibsTask>("buildJvmNativeLibs") {
     group = "build"
     description = "Builds Rust cdylib(s) for JVM JNA loading."
     targets.set(configuredJvmTargets)
     workingDir.set(layout.projectDirectory)
-    cargoPath.set(
-      providers
-        .gradleProperty("fastkrypto.cargoPath")
-        .orElse(
-          providers.environmentVariable("CARGO_HOME").map { File(it, "bin/cargo").absolutePath }
-        )
-        .orElse(
-          providers.environmentVariable("HOME").map { File(it, ".cargo/bin/cargo").absolutePath }
-        )
-        .orElse("cargo")
-    )
+    cargoPath.set(resolvedCargoPath)
+    rustcPath.set(resolvedRustcPath)
     notCompatibleWithConfigurationCache("Executes cargo builds.")
   }
 
@@ -183,6 +200,8 @@ val zigAarch64WrapperName = providers.provider { "zig-cc-aarch64-linux-gnu" }
 val zigX86WrapperName = providers.provider { "zig-cc-x86_64-linux-gnu" }
 
 tasks.withType<CargoTask>().configureEach {
+  cargo.set(resolvedCargoPath.map(::File))
+  additionalEnvironment.put("RUSTC", resolvedRustcPath)
   additionalEnvironmentPath.add(zigWrapperDir.asFile)
   // Keep C dependencies and rustc on the same deployment target across Xcode versions.
   additionalEnvironment.put("IPHONEOS_DEPLOYMENT_TARGET", "13.0")

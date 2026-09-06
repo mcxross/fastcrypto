@@ -25,12 +25,17 @@ abstract class BuildJvmNativeLibsTask : DefaultTask() {
     @get:Input
     abstract val cargoPath: Property<String>
 
+    @get:Input
+    abstract val rustcPath: Property<String>
+
     @get:Inject
     abstract val execOperations: ExecOperations
 
     @TaskAction
     fun runBuilds() {
         val cargoExecutable = cargoPath.get()
+        val rustcExecutable = rustcPath.get()
+        val toolchainBinDir = File(cargoExecutable).parentFile.absolutePath
         val wrapperDir = workingDir.get().asFile.resolve(".cargo")
         val zigAarch64 = wrapperDir.resolve("zig-cc-aarch64-linux-gnu").absolutePath
         val zigX86 = wrapperDir.resolve("zig-cc-x86_64-linux-gnu").absolutePath
@@ -41,7 +46,8 @@ abstract class BuildJvmNativeLibsTask : DefaultTask() {
                 workingDir = this@BuildJvmNativeLibsTask.workingDir.get().asFile
                 executable = cargoExecutable
                 args("build", "--release", "--target", target)
-                environment("PATH", listOf(wrapperDir.absolutePath, existingPath).joinToString(pathSeparator))
+                environment("PATH", listOf(wrapperDir.absolutePath, toolchainBinDir, existingPath).joinToString(pathSeparator))
+                environment("RUSTC", rustcExecutable)
                 environment("CC_aarch64_unknown_linux_gnu", zigAarch64)
                 environment("CXX_aarch64_unknown_linux_gnu", zigAarch64)
                 environment("CC_x86_64_unknown_linux_gnu", zigX86)
