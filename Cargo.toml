@@ -21,3 +21,13 @@ sha3 = "0.10.6"
 digest = "0.10.6"
 bcs = "0.1.4"
 tracing = "0.1.37"
+
+# Aptos batch encryption is consensus-facing and must use the same Arkworks 0.5 fork as
+# Aptos Core. The fork changes hash-to-field output, so upstream Arkworks is not wire-compatible.
+[patch.crates-io]
+ark-ec = { git = "https://github.com/aptos-labs/algebra", rev = "2cacd5efad67bce331aec780b6fcfa4a45f44306" }
+ark-ff = { git = "https://github.com/aptos-labs/algebra", rev = "2cacd5efad67bce331aec780b6fcfa4a45f44306" }
+ark-ff-asm = { git = "https://github.com/aptos-labs/algebra", rev = "2cacd5efad67bce331aec780b6fcfa4a45f44306" }
+ark-ff-macros = { git = "https://github.com/aptos-labs/algebra", rev = "2cacd5efad67bce331aec780b6fcfa4a45f44306" }
+ark-poly = { git = "https://github.com/aptos-labs/algebra", rev = "2cacd5efad67bce331aec780b6fcfa4a45f44306" }
+ark-serialize = { git = "https://github.com/aptos-labs/algebra", rev = "2cacd5efad67bce331aec780b6fcfa4a45f44306" }
