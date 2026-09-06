@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ecies_v1;
+use crate::knapsack_weight_reduction;
 use crate::types::ShareIndex;
 use fastcrypto::error::{FastCryptoError, FastCryptoResult};
 use fastcrypto::groups::GroupElement;
 use fastcrypto::hash::{Blake2b256, Digest, HashFunction};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use tracing::debug;
 
 pub type PartyId = u16;
@@ -105,6 +108,13 @@ impl<G: GroupElement + Serialize> Nodes<G> {
         self.nodes.len()
     }
 
+    /// The relative complement of `subset` within the node set — every node id not in `subset`.
+    pub fn relative_complement(&self, subset: &BTreeSet<PartyId>) -> BTreeSet<PartyId> {
+        self.node_ids_iter()
+            .filter(|id| !subset.contains(id))
+            .collect()
+    }
+
     /// Get an iterator on the share ids.
     pub fn share_ids_iter(&self) -> impl Iterator<Item = ShareIndex> {
         (1..=self.total_weight).map(|i| ShareIndex::new(i).expect("nonzero"))
@@ -133,6 +143,11 @@ impl<G: GroupElement + Serialize> Nodes<G> {
             .ok_or(FastCryptoError::InvalidInput)
     }
 
+    /// Returns true iff `party_id` corresponds to a node in this set.
+    pub fn is_valid_id(&self, party_id: PartyId) -> bool {
+        (party_id as usize) < self.nodes.len()
+    }
+
     /// Get the share ids of a node (ordered). Returns error if the node does not exist.
     pub fn share_ids_of(&self, id: PartyId) -> FastCryptoResult<Vec<ShareIndex>> {
         // Check if the input is valid.
@@ -155,6 +170,30 @@ impl<G: GroupElement + Serialize> Nodes<G> {
         let mut hash = Blake2b256::default();
         hash.update(bcs::to_bytes(&self.nodes).expect("should serialize"));
         hash.finalize()
+    }
+
+    /// Given an iterator over a set of items, one per share index, this function groups them into
+    /// a vector of vectors, one per node, according to the share ids of the nodes.
+    /// Returns error if the number of items does not match the total weight.
+    pub fn collect_to_nodes<T>(
+        &self,
+        items: impl ExactSizeIterator<Item = T>,
+    ) -> FastCryptoResult<Vec<Vec<T>>> {
+        if items.len() != self.total_weight as usize {
+            return Err(FastCryptoError::InputLengthWrong(
+                self.total_weight as usize,
+            ));
+        }
+        let mut items = items;
+        Ok(self
+            .node_ids_iter()
+            .map(|id| {
+                items
+                    .by_ref()
+                    .take(self.weight_of(id).unwrap() as usize)
+                    .collect_vec()
+            })
+            .collect_vec())
     }
 
     /// Create a new set of nodes. Nodes must have consecutive ids starting from 0.
@@ -187,6 +226,7 @@ impl<G: GroupElement + Serialize> Nodes<G> {
             }
             // Compute the precision loss.
             // U16 is safe here since total_weight is u16.
+            // TODO: The reduction delta should be estimated here as it is done in `new_reduced_with_f`.
             let delta = n.nodes.iter().map(|n| n.weight % d).sum::<u16>();
             if delta <= allowed_delta {
                 max_d = d;
@@ -220,5 +260,248 @@ impl<G: GroupElement + Serialize> Nodes<G> {
             },
             new_t,
         ))
+    }
+
+    /// Create a new set of nodes. Nodes must have consecutive ids starting from 0.
+    /// Reduces weights up to an allowed delta in the original total weight.
+    /// Finds the largest d such that:
+    /// - The new threshold is ceil(t / d)
+    /// - The new threshold for Byzantine parties is ceil(f / d)
+    /// - The new weights are all divided by d (floor division)
+    /// - The precision loss, counted as the sum of the remainders of the division by d, is at most
+    ///   the allowed delta
+    ///
+    /// In practice, allowed delta will be the extra liveness we would assume above 2f+1.
+    ///
+    /// total_weight_lower_bound allows limiting the level of reduction (e.g., in benchmarks). To
+    /// get the best results, set it to 1.
+    pub fn new_reduced_with_f(
+        nodes_vec: Vec<Node<G>>,
+        t: u16,
+        f: u16,
+        allowed_delta: u16,
+        total_weight_lower_bound: u16,
+    ) -> FastCryptoResult<(Self, u16, u16)> {
+        let n = Self::new(nodes_vec)?; // checks the input, etc
+        assert!(total_weight_lower_bound <= n.total_weight && total_weight_lower_bound > 0);
+        let mut max_d = 1;
+        for d in 2..=40 {
+            // Break if we reached the lower bound.
+            // U16 is safe here since total_weight is u16.
+            let new_total_weight = n.nodes.iter().map(|n| n.weight / d).sum::<u16>();
+            if new_total_weight < total_weight_lower_bound {
+                break;
+            }
+            // Compute the precision loss.
+            // U16 is safe here since total_weight is u16.
+            let delta =
+                n.nodes.iter().map(|n| n.weight % d).sum::<u16>() + neg_mod(t, d) + neg_mod(f, d);
+            if delta <= allowed_delta {
+                max_d = d;
+            }
+        }
+        debug!(
+            "Nodes::reduce reducing from {} with max_d {}, allowed_delta {}, total_weight_lower_bound {}",
+            n.total_weight, max_d, allowed_delta, total_weight_lower_bound
+        );
+
+        let nodes = n
+            .nodes
+            .iter()
+            .map(|n| Node {
+                id: n.id,
+                pk: n.pk.clone(),
+                weight: n.weight / max_d,
+            })
+            .collect::<Vec<_>>();
+        let accumulated_weights = Self::get_accumulated_weights(&nodes);
+        let nodes_with_nonzero_weight = Self::filter_nonzero_weights(&nodes);
+        // U16 is safe here since the original total_weight is u16.
+        let total_weight = nodes.iter().map(|n| n.weight).sum::<u16>();
+        let new_t = t.div_ceil(max_d);
+        let new_f = f.div_ceil(max_d);
+        Ok((
+            Self {
+                nodes,
+                total_weight,
+                accumulated_weights,
+                nodes_with_nonzero_weight,
+            },
+            new_t,
+            new_f,
+        ))
+    }
+
+    /// Create a new set of nodes. Nodes must have consecutive ids starting from 0.
+    /// Like [`Nodes::new_reduced_with_f`], but in addition to the integer divisor
+    /// sweep, fine-sweeps the unit interval above the first feasible integer at
+    /// granularity 0.01 to find a (possibly strictly larger) fractional divisor d.
+    /// Finds the largest d such that:
+    /// - The new threshold is ceil(t / d)
+    /// - The new threshold for Byzantine parties is ceil(f / d)
+    /// - The new weights are all divided by d (floor division)
+    /// - The precision loss, counted as the sum of remainders Σ_i (w_i mod d) plus the
+    ///   ceiling overheads (-t) mod d and (-f) mod d, is at most the allowed delta
+    ///
+    /// Operates on a 0.01-multiple grid for d (represented internally in u64
+    /// arithmetic via d_x100 = 100*d). The Stage-1 criterion is the natural
+    /// fractional-d extension of the one in `new_reduced_with_f`, with
+    /// (w mod d) := w - floor(w/d) * d ∈ [0, d) for any real d > 0; the
+    /// Safety, Liveness, and Byzantine-removal proofs go through verbatim.
+    /// Since prop_reduce considers a strict superset of `new_reduced_with_f`'s
+    /// candidates, its reduced total weight (and ceilings t', f') are always
+    /// ≤ those of `new_reduced_with_f`.
+    ///
+    /// In practice, allowed delta will be the extra liveness we would assume above 2f+1.
+    ///
+    /// total_weight_lower_bound allows limiting the level of reduction (e.g., in benchmarks). To
+    /// get the best results, set it to 1.
+    pub fn prop_reduce(
+        nodes_vec: Vec<Node<G>>,
+        t: u16,
+        f: u16,
+        allowed_delta: u16,
+        total_weight_lower_bound: u16,
+    ) -> FastCryptoResult<(Self, u16, u16)> {
+        let n = Self::new(nodes_vec)?; // checks the input, etc
+        assert!(total_weight_lower_bound <= n.total_weight && total_weight_lower_bound > 0);
+        let allowed_delta_x100 = (allowed_delta as u64) * 100;
+        let mut max_d_x100: u32 = 100; // d = 1, no reduction
+                                       // Sweep d downward from 40 to 2. Going down, the first feasible integer
+                                       // is the largest feasible integer divisor (the criterion is non-monotone
+                                       // in d, so an upward sweep cannot break early). After locking onto the
+                                       // first feasible integer d, fine-sweep (d, d+1) at 0.01 in decreasing
+                                       // order to find the largest feasible fractional divisor in that interval.
+        'outer: for d in (2u16..=40).rev() {
+            // Continue if we are below the lower bound. (Going down, W' grows as
+            // d shrinks, so once W' clears the lower bound it stays cleared.)
+            // U16 is safe here since total_weight is u16.
+            let new_total_weight = n.nodes.iter().map(|n| n.weight / d).sum::<u16>();
+            if new_total_weight < total_weight_lower_bound {
+                continue;
+            }
+            // Compute the precision loss at integer d.
+            // U16 is safe here since total_weight is u16.
+            let delta =
+                n.nodes.iter().map(|n| n.weight % d).sum::<u16>() + neg_mod(t, d) + neg_mod(f, d);
+            if delta > allowed_delta {
+                continue;
+            }
+            // Integer d is feasible; lock it as the fallback.
+            max_d_x100 = (d as u32) * 100;
+            // Fine-sweep (d, d+1) at 0.01, largest-first. The first hit is the
+            // largest feasible 0.01-multiple in that interval.
+            for k in (1..100u32).rev() {
+                let d_x100 = (d as u32) * 100 + k;
+                let new_w_total = n
+                    .nodes
+                    .iter()
+                    .map(|n| ((n.weight as u32) * 100) / d_x100)
+                    .sum::<u32>();
+                if (new_w_total as u16) < total_weight_lower_bound {
+                    continue;
+                }
+                // Σ_i (w_i mod d) * 100 = W*100 − W' * d_x100 (telescopes by floor).
+                let sum_mod_x100 =
+                    (n.total_weight as u64) * 100 - (new_w_total as u64) * (d_x100 as u64);
+                let delta_x100 = sum_mod_x100 + neg_mod_x100(t, d_x100) + neg_mod_x100(f, d_x100);
+                if delta_x100 <= allowed_delta_x100 {
+                    max_d_x100 = d_x100;
+                    break;
+                }
+            }
+            break 'outer;
+        }
+        debug!(
+            "Nodes::prop_reduce reducing from {} with max_d_x100 {}, allowed_delta {}, total_weight_lower_bound {}",
+            n.total_weight, max_d_x100, allowed_delta, total_weight_lower_bound
+        );
+
+        let nodes = n
+            .nodes
+            .iter()
+            .map(|n| Node {
+                id: n.id,
+                pk: n.pk.clone(),
+                weight: (((n.weight as u32) * 100) / max_d_x100) as u16,
+            })
+            .collect::<Vec<_>>();
+        let accumulated_weights = Self::get_accumulated_weights(&nodes);
+        let nodes_with_nonzero_weight = Self::filter_nonzero_weights(&nodes);
+        // U16 is safe here since the original total_weight is u16.
+        let total_weight = nodes.iter().map(|n| n.weight).sum::<u16>();
+        let new_t = ((t as u64) * 100).div_ceil(max_d_x100 as u64) as u16;
+        let new_f = ((f as u64) * 100).div_ceil(max_d_x100 as u64) as u16;
+        Ok((
+            Self {
+                nodes,
+                total_weight,
+                accumulated_weights,
+                nodes_with_nonzero_weight,
+            },
+            new_t,
+            new_f,
+        ))
+    }
+
+    /// Create a new set of nodes with reduced weights using the knapsack-verified
+    /// reduction.
+    pub fn knapsack_reduce(
+        nodes_vec: Vec<Node<G>>,
+        t: u16,
+        f: u16,
+        allowed_delta: u16,
+        total_weight_lower_bound: u16,
+    ) -> FastCryptoResult<(Self, u16, u16)> {
+        let n = Self::new(nodes_vec)?; // checks the input, etc
+        let weights = n.nodes.iter().map(|node| node.weight).collect::<Vec<_>>();
+        let reduction = knapsack_weight_reduction::reduce_weights(
+            &weights,
+            t,
+            f,
+            allowed_delta,
+            total_weight_lower_bound,
+        )?;
+
+        // Defense in depth: independently re-verify the security properties of
+        // the reduction (cheap, and runs only once per epoch).
+        knapsack_weight_reduction::verify_reduction(&weights, t, f, allowed_delta, &reduction)?;
+
+        debug!(
+            "Nodes::knapsack_reduce reducing from {} to {} with t' {}, f' {}, allowed_delta {}, total_weight_lower_bound {}",
+            n.total_weight,
+            reduction.weights.iter().map(|&w| w as u32).sum::<u32>(),
+            reduction.t,
+            reduction.f,
+            allowed_delta,
+            total_weight_lower_bound
+        );
+        let nodes = n
+            .nodes
+            .iter()
+            .zip(reduction.weights.iter())
+            .map(|(node, &weight)| Node {
+                id: node.id,
+                pk: node.pk.clone(),
+                weight,
+            })
+            .collect::<Vec<_>>();
+        Ok((Self::new(nodes)?, reduction.t, reduction.f))
+    }
+}
+
+/// Compute (-x) mod d = d * ceil(x/d) - x
+fn neg_mod(x: u16, d: u16) -> u16 {
+    (-(x as i32)).rem_euclid(d as i32) as u16
+}
+
+/// Compute ((-w) mod d) * 100 for the possibly-fractional divisor d = d_x100 / 100.
+/// Equals (ceil(w/d) * d - w) * 100, a non-negative integer in [0, d_x100).
+fn neg_mod_x100(w: u16, d_x100: u32) -> u64 {
+    let r = ((w as u64) * 100) % (d_x100 as u64);
+    if r == 0 {
+        0
+    } else {
+        (d_x100 as u64) - r
     }
 }

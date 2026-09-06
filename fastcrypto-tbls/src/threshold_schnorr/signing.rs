@@ -3,45 +3,38 @@
 
 use crate::polynomial::{Eval, Poly};
 use crate::threshold_schnorr::key_derivation::{compute_tweak, derive_verifying_key_internal};
-use crate::threshold_schnorr::presigning::Presignatures;
 use crate::threshold_schnorr::{avss, Address, G, S};
-use fastcrypto::error::FastCryptoError::{InputTooShort, OutOfPresigs};
+use fastcrypto::error::FastCryptoError::InputTooShort;
 use fastcrypto::error::{FastCryptoError, FastCryptoResult};
 use fastcrypto::groups::secp256k1::schnorr::{
     bip0340_hash_to_scalar, SchnorrPublicKey, SchnorrSignature, Tag,
 };
 use fastcrypto::groups::GroupElement;
 use itertools::Itertools;
+use tap::TapFallible;
+use tracing::warn;
 
-/// Generate partial threshold Schnorr signatures for a given message using a presigning triple.
+/// Generate partial threshold Schnorr signatures for a given message using a presigning tuple.
+/// The presigning tuple must be taken from a [Presignatures] iterator, the other parties should use the same tuple and one tuple may only be used once.
 /// Returns also the public nonce R.
 ///
-/// The signatures produced follow the BIP-0340 standard (https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki).
+/// The signatures produced follow the BIP-0340 standard (<https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki>).
 ///
 /// If a derivation index is provided, a new verifying key is derived for this index (see
 /// [derive_verifying_key]), and the signature is adjusted accordingly.
 /// The signature will be valid for the derived verifying key.
 ///
-/// Returns an `OutOfPresigs` error if the presignatures iterator is exhausted.
 /// `GeneralOpaqueError` is returned if the generated nonce R is the identity element (should happen only with negligible probability).
 /// `InvalidInput` is returned if the verifying key is the identity element.
-pub fn generate_partial_signatures<const BATCH_SIZE: usize>(
+pub fn generate_partial_signatures(
     message: &[u8],
-    presignatures: &mut Presignatures<BATCH_SIZE>,
+    (mut secret_presigs, public_presig): (Vec<S>, G),
     beacon_value: &S,
     my_signing_key_shares: &avss::SharesForNode,
     verifying_key: &G,
     derivation_address: Option<&Address>,
 ) -> FastCryptoResult<(G, Vec<Eval<S>>)> {
-    // TODO: Each output from an instance of Presigning has a unique index. Perhaps this is needed for coordination?
-    let (_, mut secret_presigs, public_presig) = presignatures.next().ok_or(OutOfPresigs)?;
-
-    let r_g = public_presig + G::generator() * beacon_value;
-
-    // Since both the public_presig and the beacon_value are random, this should happen only with negligible probability.
-    if r_g == G::zero() {
-        return Err(FastCryptoError::GeneralOpaqueError);
-    }
+    let r_g = compute_nonce(&public_presig, beacon_value)?;
 
     // In BIP-340, the nonce R must have an even Y coordinate.
     // If it doesn't, we negate the secret nonce to get a new nonce R' = -R with an even Y.
@@ -54,7 +47,7 @@ pub fn generate_partial_signatures<const BATCH_SIZE: usize>(
 
     // If a derivation index is provided, derive a new verifying key (and implicitly also signing key) for this index.
     let verifying_key = if let Some(address) = derivation_address {
-        derive_verifying_key_internal(verifying_key, address)
+        derive_verifying_key_internal(verifying_key, address)?
     } else {
         *verifying_key
     };
@@ -67,12 +60,17 @@ pub fn generate_partial_signatures<const BATCH_SIZE: usize>(
         h = -h;
     }
 
+    // sanity check.
+    if my_signing_key_shares.shares.len() != secret_presigs.len() {
+        return Err(FastCryptoError::InvalidInput);
+    }
+
     Ok((
         public_presig,
         my_signing_key_shares
             .shares
             .iter()
-            .zip_eq(secret_presigs)
+            .zip(secret_presigs)
             .map(
                 |(
                     Eval {
@@ -117,17 +115,45 @@ pub fn aggregate_signatures(
         return Err(FastCryptoError::InvalidInput);
     }
 
-    // Interpolate the partial signatures to get the full signature.
-    let mut s = Poly::recover_c0(
+    let s = Poly::recover_c0(
         threshold,
         partial_signatures.iter().take(threshold as usize),
     )?;
 
+    finalize_schnorr_signature(
+        message,
+        public_presig,
+        beacon_value,
+        s,
+        verifying_key,
+        derivation_address,
+    )
+}
+
+/// Wrap an already-recovered signing scalar `s = f(0)` into a BIP-0340 Schnorr signature.
+///
+/// This is the second half of [aggregate_signatures], split out so callers that recover `s`
+/// through a different path (e.g. Reed–Solomon decoding, which yields `s` as the constant
+/// coefficient of the message polynomial) can reuse the BIP-0340 finalization without
+/// re-running Lagrange interpolation.
+///
+/// If a derivation index is provided, a new verifying key is derived for this index (see
+/// [derive_verifying_key]), and the signature is adjusted accordingly. The signature will
+/// be valid for the derived verifying key.
+///
+/// `GeneralOpaqueError` is returned if the computed nonce R is the identity element.
+/// `InvalidSignature` is returned if the aggregated signature does not verify.
+/// `InvalidInput` is returned if the provided verifying key is the identity element.
+pub fn finalize_schnorr_signature(
+    message: &[u8],
+    public_presig: &G,
+    beacon_value: &S,
+    mut s: S,
+    verifying_key: &G,
+    derivation_address: Option<&Address>,
+) -> FastCryptoResult<SchnorrSignature> {
     // Compute the nonce R for the signature.
-    let r_g = public_presig + G::generator() * beacon_value;
-    if r_g == G::zero() {
-        return Err(FastCryptoError::GeneralOpaqueError);
-    }
+    let r_g = compute_nonce(public_presig, beacon_value)?;
 
     // In acc. with BIP-0340, we need to ensure the nonce R has an even Y coordinate.
     // If it doesn't, we subtract the beacon value instead of adding it like it is done for the secret shares.
@@ -140,12 +166,13 @@ pub fn aggregate_signatures(
 
     // If a derivation index is provided, compute the derived verifying key and adjust the signature accordingly.
     let verifying_key = if let Some(address) = derivation_address {
-        let tweak = compute_tweak(verifying_key, address);
-        let derived_vk = derive_verifying_key_internal(verifying_key, address);
+        let tweak = compute_tweak(verifying_key, address)?;
+        let derived_vk = derive_verifying_key_internal(verifying_key, address)?;
+        let h = tweak * bip0340_hash(&r_g, &derived_vk, message)?;
         if derived_vk.has_even_y()? {
-            s += tweak * bip0340_hash(&r_g, &derived_vk, message)?;
+            s += h;
         } else {
-            s -= tweak * bip0340_hash(&r_g, &derived_vk, message)?;
+            s -= h;
         }
         derived_vk
     } else {
@@ -154,10 +181,22 @@ pub fn aggregate_signatures(
 
     let signature = SchnorrSignature::try_from((r_g, s))?;
 
-    // TODO: Handle invalid signatures
-    SchnorrPublicKey::try_from(&verifying_key)?.verify(message, &signature)?;
+    SchnorrPublicKey::try_from(&verifying_key)?
+        .verify(message, &signature)
+        .tap_err(|e| warn!("signing: aggregated signature failed verification: {e:?}"))?;
 
     Ok(signature)
+}
+
+/// Compute the signature nonce `R = public_presig + G * beacon_value`. Since both inputs are
+/// random, the identity element occurs only with negligible probability and is rejected with
+/// [`FastCryptoError::GeneralOpaqueError`].
+fn compute_nonce(public_presig: &G, beacon_value: &S) -> FastCryptoResult<G> {
+    let r_g = *public_presig + G::generator() * beacon_value;
+    if r_g == G::zero() {
+        return Err(FastCryptoError::GeneralOpaqueError);
+    }
+    Ok(r_g)
 }
 
 fn bip0340_hash(r_g: &G, vk: &G, message: &[u8]) -> FastCryptoResult<S> {

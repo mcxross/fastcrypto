@@ -29,6 +29,9 @@ env:
   # Don't emit giant backtraces in the CI logs.
   RUST_BACKTRACE: short
 
+permissions:
+  contents: read
+
 jobs:
   license-check:
     name: license-check
@@ -54,13 +57,15 @@ jobs:
       - uses: taiki-e/install-action@d30f7ecb94d4d882276efb3967be14b8ef34d289 # pin@nextest
       # make sure benches don't bit-rot
       - name: build benches
-        run: cargo build --benches --features experimental,copy_key,unsecure_schemes
-      - name: cargo test
-      # TODO: `cargo nextest run` doesn't work on windows, so we use `cargo test` instead
-        run: cargo test --all-features
+        run: cargo build --benches --features experimental,copy_key
+      # Skip zklogin e2e tests (run separately in non-required workflow)
+      - name: cargo nextest
+        run: cargo nextest run --all-features -E 'not test(zk_login_e2e)'
+      # nextest does not run doctests, and the step above used to run them
+      # implicitly under --all-features, so run them here under the same features.
       - name: Doctests
         run: |
-          cargo test --doc --features experimental,copy_key,unsecure_schemes
+          cargo test --doc --all-features
       # Ensure there are no uncommitted changes in the repo after running tests
       - run: scripts/changed-files.sh
 

@@ -135,14 +135,17 @@ where
     ///
     /// Returns `None` if the provided index is too large.
     pub fn compute_root(&self, leaf: &[u8], leaf_index: usize) -> Option<Node> {
-        if leaf_index >> self.path.len() != 0 {
+        if leaf_index
+            .checked_shr(self.path.len() as u32)
+            .is_none_or(|s| s != 0)
+        {
             return None;
         }
         let mut current_hash = leaf_hash::<T>(leaf);
         let mut level_index = leaf_index;
         for sibling in self.path.iter() {
             // The sibling hash of the current node
-            if level_index % 2 == 0 {
+            if level_index.is_multiple_of(2) {
                 // The current node is a left child
                 current_hash = inner_hash::<T>(&current_hash, sibling);
             } else {
@@ -160,7 +163,7 @@ where
         let mut level_index = leaf_index;
         for sibling in self.path.iter() {
             // The sibling hash of the current node
-            if level_index % 2 == 0 {
+            if level_index.is_multiple_of(2) {
                 // The current node is a left child
                 if sibling.as_ref() != EMPTY_NODE.as_ref() {
                     return false;
@@ -170,6 +173,12 @@ where
             level_index /= 2;
         }
         true
+    }
+
+    /// The length of the proof, aka the number of sibling hashes on the path from the leaf to the root.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.path.len()
     }
 }
 
@@ -363,7 +372,7 @@ where
     }
 
     /// Create the [`MerkleTree`] as a commitment to the provided data hashes.
-    pub fn build_from_leaf_hashes<I>(iter: I) -> Self
+    fn build_from_leaf_hashes<I>(iter: I) -> Self
     where
         I: IntoIterator,
         I::IntoIter: ExactSizeIterator<Item = Node>,
@@ -432,7 +441,7 @@ where
         while n_level > 1 {
             // All levels contain an even number of nodes
             n_level = n_level.next_multiple_of(2);
-            let sibling_index = if level_index % 2 == 0 {
+            let sibling_index = if level_index.is_multiple_of(2) {
                 level_base_index + level_index + 1
             } else {
                 level_base_index + level_index - 1

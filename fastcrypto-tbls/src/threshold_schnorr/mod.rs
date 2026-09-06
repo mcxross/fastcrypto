@@ -6,36 +6,55 @@
 //!
 //! It provides the following protocols:
 //!
-//! 1. A Distributed Key Generation (DKG) protocol to generate a shared signing key without a trusted dealer. The protocol also allows resharing of a share from a previous DKG, allowing for key rotation. This is implemented in the [avss] module.
-//! 2. A protocol to generate a batch of secret shared nonces for signing. This is implemented in the [batch_avss] module.
-//! 3. A presigning protocol to create presigning tuples from the secret shared nonces. This is implemented in the [presigning] module. The presigning tuples can be created in advance of knowing the message to be signed, and one tuple is consumed for each signature.
-//! 4. A signing protocol which allows parties to create partial signatures from a presigning tuple and aggregate them into a full signature if there are enough partial signatures. This is implemented in the [signing] module.
+//! 1. A Distributed Key Generation (DKG) protocol to generate a shared signing key without a
+//!    trusted dealer. The protocol also allows resharing of a share from a previous DKG, allowing
+//!    for key rotation. This is implemented in the [avss] module.
+//! 2. A protocol to generate a batch of secret shared nonces for signing. The AVID-based
+//!    implementation used by the rest of this module lives in [batch_avss_avid]; the original
+//!    (pre-AVID) implementation is kept in [batch_avss].
+//! 3. A presigning protocol to create presigning tuples from the secret shared nonces. This is
+//!    implemented in the [presigning] module. The presigning tuples can be created in advance of
+//!    knowing the message to be signed, and one tuple is consumed for each signature.
+//! 4. A signing protocol which allows parties to create partial signatures from a presigning
+//!    tuple and aggregate them into a full signature if there are enough partial signatures. This
+//!    is implemented in the [signing] module.
 //!
-//! For both the DKG and nonce generation protocols, it is assumed that each party has an encryption key pair (ECIES) and these public keys are known to all parties. These can be reused for all instances of the protocols.
+//! For both the DKG and nonce generation protocols, it is assumed that each party has an
+//! encryption key pair (ECIES) and these public keys are known to all parties. These can be
+//! reused for all instances of the protocols.
 //!
 //! The thresholds are defined as follows:
-//! * <i>n</i> = total number of parties
-//! * <i>f</i> = maximum number of Byzantine parties
+//! * <i>W</i> = total weight of all parties
+//! * <i>f</i> = maximum Byzantine weight
 //! * <i>t</i> = threshold for signing
 //!
-//! The following conditions must hold: <i>t + 2f &leq; n</i> and <i>t > f</i>.
+//! For the weights used here, [Parameters::validate] checks the basic invariants `t < W` and
+//! `t &geq; f`. The AVID-based nonce protocol additionally requires `W > 2f` (enforced in
+//! `Avid::new`).
 
 use crate::nodes::PartyId;
 use crate::random_oracle::RandomOracle;
 use crate::threshold_schnorr::Extensions::{Challenge, Encryption, Recovery};
 use fastcrypto::encoding::{Encoding, Hex};
+use fastcrypto::error::FastCryptoError::InvalidInput;
+use fastcrypto::error::FastCryptoResult;
 use fastcrypto::groups;
 use fastcrypto::groups::ristretto255::RistrettoPoint;
 use fastcrypto::groups::GroupElement;
+use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
+mod avid;
 pub mod avss;
 pub mod batch_avss;
+pub mod batch_avss_avid;
 mod bcs;
 pub mod complaint;
 pub mod key_derivation;
+mod merkle;
 mod pascal_matrix;
 pub mod presigning;
+pub mod recovery_proof;
 pub mod reed_solomon;
 pub mod signing;
 
@@ -45,11 +64,35 @@ pub type G = groups::secp256k1::ProjectivePoint;
 /// Default scalar
 pub type S = <G as GroupElement>::ScalarType;
 
-/// The group used for multi-recipient encryption. Any group that has a secure hash-to-group can be used here.
+/// The group used for multi-recipient encryption. Any group that has a secure hash-to-group can
+/// be used here.
 type EG = RistrettoPoint;
 
 /// An address on the Sui network.
 pub type Address = [u8; 32];
+
+/// Threshold parameters for the AVSS protocols.
+#[derive(Copy, Clone, Debug)]
+pub struct Parameters {
+    /// Reconstruction threshold: `≥ t` valid shares (by weight) reconstruct a secret.
+    pub t: u16,
+    /// Byzantine bound by share-weight.
+    pub f: u16,
+}
+
+impl Parameters {
+    /// Validate `(t, f)` against the given total weight `W`, checking the basic invariants needed
+    /// for the sharing here: `0 < f`, `t < W` and `t ≥ f`. Note the AVID-based nonce protocol has a
+    /// further requirement, `W > 2f`, which is enforced when its Reed-Solomon coder is built
+    /// (`Avid::new`), not here.
+    pub fn validate(&self, total_weight: u16) -> FastCryptoResult<()> {
+        let Parameters { t, f } = *self;
+        if f == 0 || t == 0 || t >= total_weight || t < f {
+            return Err(InvalidInput);
+        }
+        Ok(())
+    }
+}
 
 /// Helper function to create a random oracle from a session ID.
 fn random_oracle_from_sid(sid: &[u8]) -> RandomOracle {
@@ -63,14 +106,46 @@ enum Extensions {
     Challenge,
 }
 
+/// This represents a certificate over a payload that a subset of the parties have signed.
+/// Here, the implementation is abstract, and it is up to the caller to implement the actual
+/// verification functionality.
+pub trait Certificate {
+    type Payload;
+
+    fn signers(&self) -> &BTreeSet<PartyId>;
+
+    fn payload(&self) -> &Self::Payload;
+
+    fn verify(&self) -> FastCryptoResult<()>;
+
+    fn to_verified(&self) -> FastCryptoResult<VerifiedCertificate<Self>>
+    where
+        Self: Clone,
+    {
+        self.verify().map(|_| VerifiedCertificate(self.clone()))
+    }
+}
+
+/// A [Certificate] that has already been verified.
+pub struct VerifiedCertificate<C>(C);
+
+impl<C: Certificate> VerifiedCertificate<C> {
+    pub fn certificate(&self) -> &C {
+        &self.0
+    }
+
+    pub fn payload(&self) -> &C::Payload {
+        self.0.payload()
+    }
+}
+
 impl Display for Extensions {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let result = match self {
-            Recovery(accuser) => format!("recovery of {accuser}"),
-            Encryption => "encryption".to_string(),
-            Challenge => "challenge".to_string(),
-        };
-        write!(f, "{result}")
+        match self {
+            Recovery(accuser) => write!(f, "recovery of {accuser}"),
+            Encryption => write!(f, "encryption"),
+            Challenge => write!(f, "challenge"),
+        }
     }
 }
 
@@ -80,20 +155,18 @@ mod tests {
     use crate::ecies_v1::PublicKey;
     use crate::nodes::{Node, Nodes, PartyId};
     use crate::polynomial::{Eval, Poly};
-    use crate::threshold_schnorr::batch_avss::{ShareBatch, SharesForNode};
+    use crate::threshold_schnorr::batch_avss_avid::{ShareBatch, SharesForNode};
     use crate::threshold_schnorr::key_derivation::derive_verifying_key;
     use crate::threshold_schnorr::presigning::Presignatures;
     use crate::threshold_schnorr::signing::{aggregate_signatures, generate_partial_signatures};
-    use crate::threshold_schnorr::{avss, batch_avss, EG, G, S};
-    use crate::types::{IndexedValue, ShareIndex};
+    use crate::threshold_schnorr::{avss, batch_avss_avid as batch_avss, Parameters, EG, G, S};
+    use crate::types::{get_uniform_value, IndexedValue, ShareIndex};
     use fastcrypto::groups::secp256k1::schnorr::SchnorrPublicKey;
     use fastcrypto::groups::{GroupElement, Scalar};
     use fastcrypto::traits::AllowedRng;
     use itertools::Itertools;
-    use std::array;
     use std::collections::HashMap;
     use std::hash::Hash;
-
     #[test]
     fn test_e2e() {
         // No complaints, all honest
@@ -102,7 +175,7 @@ mod tests {
         let weights = [1, 2, 2, 2];
         let n = weights.len();
 
-        const BATCH_SIZE: usize = 10;
+        let batch_size_per_weight: u16 = 10;
 
         let mut rng = rand::thread_rng();
         let sks = (0..n)
@@ -126,16 +199,21 @@ mod tests {
         //
 
         // Map from each party to the outputs it has received
-        let mut dkg_outputs = HashMap::<PartyId, HashMap<PartyId, avss::PartialOutput>>::new();
+        let mut dkg_outputs = HashMap::<PartyId, HashMap<PartyId, avss::AvssOutput>>::new();
         nodes.node_ids_iter().for_each(|id| {
             dkg_outputs.insert(id, HashMap::new());
         });
 
-        let mut messages = Vec::new();
         for dealer_id in nodes.node_ids_iter() {
             let sid = format!("dkg-test-session-{}", dealer_id).into_bytes();
-            let dealer: avss::Dealer =
-                avss::Dealer::new(None, nodes.clone(), t, f, sid.clone()).unwrap();
+            let dealer: avss::Dealer = avss::Dealer::new(
+                None,
+                nodes.clone(),
+                Parameters { t, f },
+                sid.clone(),
+                &mut rng,
+            )
+            .unwrap();
             let receivers = sks
                 .iter()
                 .enumerate()
@@ -143,21 +221,21 @@ mod tests {
                     avss::Receiver::new(
                         nodes.clone(),
                         id as u16,
-                        t,
+                        Parameters { t, f },
                         sid.clone(),
                         None,
                         enc_secret_key.clone(),
                     )
+                    .unwrap()
                 })
                 .collect::<Vec<_>>();
 
             // Each dealer creates a message
-            let message = dealer.create_message(&mut rng).unwrap();
-            messages.push(message.clone());
+            let message = dealer.create_message(&mut rng);
 
             // Each receiver processes the message. In this case, we assume all are honest and there are no complaints.
             receivers.iter().for_each(|receiver| {
-                let output = assert_valid(receiver.process_message(&message).unwrap());
+                let output = assert_valid(receiver.process_message(&message, &mut rng).unwrap());
                 dkg_outputs
                     .get_mut(&receiver.id())
                     .unwrap()
@@ -175,7 +253,7 @@ mod tests {
             .map(|node| {
                 (
                     node.id,
-                    avss::ReceiverOutput::complete_dkg(
+                    avss::DkOutput::complete_dkg(
                         t,
                         &nodes,
                         restrict(dkg_outputs.get(&node.id).unwrap(), dkg_cert.into_iter()),
@@ -186,8 +264,7 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         // All receivers should now have the same verifying key
-        assert!(merged_shares.values().map(|output| output.vk).all_equal());
-        let vk = merged_shares.get(&0).unwrap().vk;
+        let vk = get_uniform_value(merged_shares.values().map(|output| output.vk)).unwrap();
 
         // For testing, we now recover the secret key from t shares and check that the secret key matches the verification key.
         // In practice, the parties should never do this...
@@ -203,44 +280,47 @@ mod tests {
         //
 
         // Generate a batch of nonces for each party's share
-        let mut presigning_outputs =
-            HashMap::<PartyId, Vec<batch_avss::ReceiverOutput<BATCH_SIZE>>>::new();
+        let mut presigning_outputs = HashMap::<PartyId, Vec<batch_avss::ReceiverOutput>>::new();
         nodes.node_ids_iter().for_each(|id| {
             presigning_outputs.insert(id, Vec::new());
         });
 
         // Each dealer generates a batch of presigs per share they control.
         for dealer_id in nodes.node_ids_iter() {
-            for (i, _) in nodes.share_ids_of(dealer_id).unwrap().iter().enumerate() {
-                let sid = format!("presig-test-session-{}-{}", dealer_id, i).into_bytes();
-                let dealer: batch_avss::Dealer =
-                    batch_avss::Dealer::new(nodes.clone(), t, f, sid.clone()).unwrap();
-                let receivers = sks
-                    .iter()
-                    .enumerate()
-                    .map(|(id, enc_secret_key)| {
-                        batch_avss::Receiver::new(
-                            nodes.clone(),
-                            id as u16,
-                            t,
-                            sid.clone(),
-                            enc_secret_key.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
+            let sid = format!("presig-test-session-{}", dealer_id).into_bytes();
+            let params = Parameters { t, f };
+            let dealer: batch_avss::Dealer = batch_avss::Dealer::new(
+                nodes.clone(),
+                dealer_id,
+                params,
+                sid.clone(),
+                batch_size_per_weight,
+            )
+            .unwrap();
+            let receivers = sks
+                .iter()
+                .enumerate()
+                .map(|(id, enc_secret_key)| {
+                    batch_avss::Receiver::new(
+                        nodes.clone(),
+                        id as u16,
+                        dealer_id,
+                        params,
+                        sid.clone(),
+                        enc_secret_key.clone(),
+                        batch_size_per_weight,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
 
-                // Each dealer creates a message
-                let message = dealer.create_message(&mut rng).unwrap();
-
-                // Each receiver processes the message.
-                // In this case, we assume all are honest and there are no complaints.
-                receivers.iter().for_each(|receiver| {
-                    let output = assert_valid_batch(receiver.process_message(&message).unwrap());
-                    presigning_outputs
-                        .get_mut(&receiver.id())
-                        .unwrap()
-                        .push(output);
-                });
+            // Optimistic phase: every receiver confirms, so no pessimistic AVID phase is needed.
+            let state = dealer.create_avss_messages(&mut rng).unwrap();
+            for r in &receivers {
+                let (output, _confirm, _verified_common) = r
+                    .process_avss_message(&state.message_for(r.id).unwrap())
+                    .unwrap();
+                presigning_outputs.get_mut(&r.id).unwrap().push(output);
             }
         }
 
@@ -248,17 +328,28 @@ mod tests {
         let mut presigs = presigning_outputs
             .into_iter()
             .map(|(id, outputs)| {
+                // Convert the AVID-based outputs into the original batch_avss types that
+                // presigning consumes; stamp each share with its share index from `share_ids_of`.
+                let indices = nodes.share_ids_of(id).unwrap();
                 (
                     id,
-                    Presignatures::<BATCH_SIZE>::new(
-                        &nodes.share_ids_of(id).unwrap(),
-                        outputs,
-                        f as usize,
+                    Presignatures::new(
+                        outputs
+                            .into_iter()
+                            .map(|o| o.into_legacy(&indices))
+                            .collect(),
+                        batch_size_per_weight,
+                        Parameters { t, f },
+                        false,
                     )
                     .unwrap(),
                 )
             })
             .collect::<HashMap<_, _>>();
+        assert_eq!(
+            presigs.get(&PartyId::from(1u8)).unwrap().len(),
+            batch_size_per_weight as usize * (weights.iter().sum::<u16>() as usize - f as usize)
+        );
 
         //
         // SIGNING
@@ -275,7 +366,7 @@ mod tests {
             .map(|node| {
                 generate_partial_signatures(
                     message,
-                    presigs.get_mut(&node.id).unwrap(),
+                    presigs.get_mut(&node.id).unwrap().next().unwrap(),
                     &beacon_value,
                     &merged_shares.get(&node.id).unwrap().my_shares,
                     &vk,
@@ -286,15 +377,17 @@ mod tests {
             .collect_vec();
 
         // The public parts should all be the same
-        assert!(partial_signatures
-            .iter()
-            .map(|partial_signature| partial_signature.0)
-            .all_equal());
+        let public_presig = get_uniform_value(
+            partial_signatures
+                .iter()
+                .map(|partial_signature| partial_signature.0),
+        )
+        .unwrap();
 
         // Aggregate partial signatures
         let signature = aggregate_signatures(
             message,
-            &partial_signatures[0].0, // All public parts are equal, so we just take the first
+            &public_presig,
             &beacon_value,
             &partial_signatures
                 .iter()
@@ -319,8 +412,7 @@ mod tests {
         // Map from each party to the ordered list of outputs it has received.
         // Here, each party will act as dealer multiple times -- once per share they have.
         let mut dkg_outputs_after_rotation =
-            HashMap::<(PartyId, ShareIndex), avss::PartialOutput>::new();
-        let mut messages = HashMap::<(PartyId, ShareIndex), avss::Message>::new();
+            HashMap::<(PartyId, ShareIndex), avss::AvssOutput>::new();
 
         for dealer_id in nodes.node_ids_iter() {
             for share_index in nodes.share_ids_of(dealer_id).unwrap() {
@@ -334,8 +426,14 @@ mod tests {
                     .share_for_index(share_index)
                     .unwrap()
                     .value;
-                let dealer: avss::Dealer =
-                    avss::Dealer::new(Some(secret), nodes.clone(), t, f, sid.clone()).unwrap();
+                let dealer: avss::Dealer = avss::Dealer::new(
+                    Some(secret),
+                    nodes.clone(),
+                    Parameters { t, f },
+                    sid.clone(),
+                    &mut rng,
+                )
+                .unwrap();
 
                 let receivers = sks
                     .iter()
@@ -344,29 +442,28 @@ mod tests {
                         let commitment = merged_shares
                             .get(&(id as u16))
                             .unwrap()
-                            .commitments
-                            .iter()
-                            .find(|c| c.index == share_index)
+                            .commitment_for_index(share_index)
                             .unwrap()
                             .value;
                         avss::Receiver::new(
                             nodes.clone(),
                             id as u16,
-                            t,
+                            Parameters { t, f },
                             sid.clone(),
                             Some(commitment),
                             enc_secret_key.clone(),
                         )
+                        .unwrap()
                     })
                     .collect::<Vec<_>>();
 
                 // Each dealer creates a message
-                let message = dealer.create_message(&mut rng).unwrap();
-                messages.insert((dealer_id, share_index), message.clone());
+                let message = dealer.create_message(&mut rng);
 
                 // Each receiver processes the message. In this case, we assume all are honest and there are no complaints.
                 receivers.iter().for_each(|receiver| {
-                    let output = assert_valid(receiver.process_message(&message).unwrap());
+                    let output =
+                        assert_valid(receiver.process_message(&message, &mut rng).unwrap());
                     dkg_outputs_after_rotation.insert((receiver.id(), share_index), output);
                 });
             }
@@ -380,7 +477,7 @@ mod tests {
             .collect_vec();
 
         // Now, each party has collected their outputs from all dealers and can form their new shares from the ones in the certificate.
-        let merged_shares_after_rotation = nodes
+        let merged_shares = nodes
             .node_ids_iter()
             .map(|receiver_id| {
                 let my_shares_from_cert = share_indices_in_cert
@@ -395,7 +492,7 @@ mod tests {
                     .collect_vec();
                 (
                     receiver_id,
-                    avss::ReceiverOutput::complete_key_rotation(
+                    avss::DkOutput::complete_key_rotation(
                         t,
                         receiver_id,
                         &nodes,
@@ -410,13 +507,13 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         // The verifying key should be the same as  before
-        for output in merged_shares_after_rotation.values() {
+        for output in merged_shares.values() {
             assert_eq!(output.vk, vk);
         }
 
         // For testing, we now recover the secret key from t shares and check that the secret key matches the verification key.
         // In practice, the parties should never do this...
-        let shares = merged_shares_after_rotation
+        let shares = merged_shares
             .values()
             .flat_map(|output| output.my_shares.shares.clone())
             .take(t as usize);
@@ -424,13 +521,8 @@ mod tests {
         assert_eq!(G::generator() * sk, vk);
 
         // Check commitments on the reshared secret from the first dealer
-        let commitment_1 = merged_shares_after_rotation
-            .get(&0)
-            .unwrap()
-            .commitments
-            .first()
-            .unwrap();
-        let secret_1 = merged_shares_after_rotation
+        let commitment_1 = merged_shares.get(&0).unwrap().commitments.first().unwrap();
+        let secret_1 = merged_shares
             .get(&0)
             .unwrap()
             .share_for_index(commitment_1.index)
@@ -453,12 +545,9 @@ mod tests {
             .map(|node| {
                 generate_partial_signatures(
                     message_2,
-                    presigs.get_mut(&node.id).unwrap(),
+                    presigs.get_mut(&node.id).unwrap().next().unwrap(),
                     &beacon_value,
-                    &merged_shares_after_rotation
-                        .get(&node.id)
-                        .unwrap()
-                        .my_shares,
+                    &merged_shares.get(&node.id).unwrap().my_shares,
                     &vk,
                     None,
                 )
@@ -467,15 +556,17 @@ mod tests {
             .collect_vec();
 
         // The public parts should all be the same
-        assert!(partial_signatures
-            .iter()
-            .map(|partial_signature| partial_signature.0)
-            .all_equal());
+        let public_presig = get_uniform_value(
+            partial_signatures
+                .iter()
+                .map(|partial_signature| partial_signature.0),
+        )
+        .unwrap();
 
         // Aggregate partial signatures
         let signature_2 = aggregate_signatures(
             message_2,
-            &partial_signatures[0].0, // All public parts are equal, so we just take the first
+            &public_presig,
             &beacon_value,
             &partial_signatures
                 .iter()
@@ -494,21 +585,10 @@ mod tests {
             .unwrap();
     }
 
-    fn assert_valid_batch<const N: usize>(
-        processed_message: batch_avss::ProcessedMessage<N>,
-    ) -> batch_avss::ReceiverOutput<N> {
-        if let batch_avss::ProcessedMessage::Valid(output) = processed_message {
-            output
-        } else {
-            panic!("Expected valid message");
-        }
-    }
-
-    fn assert_valid(processed_message: avss::ProcessedMessage) -> avss::PartialOutput {
-        if let avss::ProcessedMessage::Valid(output) = processed_message {
-            output
-        } else {
-            panic!("Expected valid message");
+    fn assert_valid(pm: avss::ProcessedMessage) -> avss::AvssOutput {
+        match pm {
+            avss::ProcessedMessage::Valid(po) => po,
+            avss::ProcessedMessage::Complaint(_) => panic!("expected valid avss output"),
         }
     }
 
@@ -538,44 +618,47 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Mock DKG
-        // Here, we don't assume anything about the partity of the vk's Y coordinate since we can't do that in a real DKG.
+        // Here, we don't assume anything about the parity of the vk's Y coordinate since we can't do that in a real DKG.
         let sk_element = S::rand(&mut rng);
         let vk_element = G::generator() * sk_element;
 
         let sk_shares = mock_shares(&mut rng, sk_element, t, n);
 
         // Mock nonce generation
-        const BATCH_SIZE: usize = 10;
+        let batch_size_per_weight: u16 = 10;
         let nonces_for_dealer = (0..n)
             .map(|_| {
-                let nonces: [S; BATCH_SIZE] = array::from_fn(|_| S::rand(&mut rng));
-                let public_keys = nonces.map(|s| G::generator() * s);
-                let nonce_shares: [Vec<S>; BATCH_SIZE] = nonces.map(|nonce| {
-                    mock_shares(&mut rng, nonce, t, n)
-                        .iter()
-                        .map(|s| s.value)
-                        .collect_vec()
-                });
+                let nonces = (0..batch_size_per_weight)
+                    .map(|_| S::rand(&mut rng))
+                    .collect_vec();
+                let public_keys = nonces.iter().map(|s| G::generator() * s).collect_vec();
+                let nonce_shares: Vec<Vec<S>> = nonces
+                    .iter()
+                    .map(|&nonce| {
+                        mock_shares(&mut rng, nonce, t, n)
+                            .iter()
+                            .map(|s| s.value)
+                            .collect_vec()
+                    })
+                    .collect_vec();
                 (nonces, public_keys, nonce_shares)
             })
             .collect_vec();
 
         let outputs = (0..n)
             .map(|i| {
-                let index = ShareIndex::new(i + 1).unwrap();
                 (0..n)
                     .map(|j| {
                         batch_avss::ReceiverOutput {
                             my_shares: SharesForNode {
-                                batches: vec![ShareBatch {
-                                    index,
-                                    shares: array::from_fn(|l| {
-                                        nonces_for_dealer[j as usize].2[l][i as usize]
-                                    }),
+                                shares: vec![ShareBatch {
+                                    batch: (0..batch_size_per_weight as usize)
+                                        .map(|l| nonces_for_dealer[j as usize].2[l][i as usize])
+                                        .collect_vec(),
                                     blinding_share: Default::default(), // Not used for this test
                                 }],
                             },
-                            public_keys: nonces_for_dealer[j as usize].1,
+                            public_keys: nonces_for_dealer[j as usize].1.clone(),
                         }
                     })
                     .collect_vec()
@@ -586,14 +669,24 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, output)| {
+                let indices = [ShareIndex::new(i as u16 + 1).unwrap()];
                 Presignatures::new(
-                    &[ShareIndex::new((i + 1) as u16).unwrap()],
-                    output,
-                    f as usize,
+                    output
+                        .into_iter()
+                        .map(|o| o.into_legacy(&indices))
+                        .collect(),
+                    batch_size_per_weight,
+                    Parameters { t, f },
+                    false,
                 )
                 .unwrap()
             })
             .collect_vec();
+
+        assert_eq!(
+            presigning[0].len(),
+            batch_size_per_weight as usize * (n - f) as usize
+        );
 
         let message = b"Hello, world!";
 
@@ -608,7 +701,7 @@ mod tests {
                 };
                 generate_partial_signatures(
                     message,
-                    presigning,
+                    presigning.next().unwrap(),
                     &beacon_value,
                     &my_shares,
                     &vk_element,
@@ -618,11 +711,12 @@ mod tests {
             })
             .collect_vec();
 
-        assert!(partial_signatures
-            .iter()
-            .map(|partial_signature| partial_signature.0)
-            .all_equal());
-        let public = partial_signatures[0].0;
+        let public = get_uniform_value(
+            partial_signatures
+                .iter()
+                .map(|partial_signature| partial_signature.0),
+        )
+        .unwrap();
 
         let signature = aggregate_signatures(
             message,
@@ -661,44 +755,47 @@ mod tests {
         let mut rng = rand::thread_rng();
 
         // Mock DKG
-        // Here, we don't assume anything about the partity of the vk's Y coordinate since we can't do that in a real DKG.
+        // Here, we don't assume anything about the parity of the vk's Y coordinate since we can't do that in a real DKG.
         let sk_element = S::rand(&mut rng);
         let vk_element = G::generator() * sk_element;
 
         let sk_shares = mock_shares(&mut rng, sk_element, t, n);
 
         // Mock nonce generation
-        const BATCH_SIZE: usize = 10;
+        let batch_size_per_weight: u16 = 100;
         let nonces_for_dealer = (0..n)
             .map(|_| {
-                let nonces: [S; BATCH_SIZE] = array::from_fn(|_| S::rand(&mut rng));
-                let public_keys = nonces.map(|s| G::generator() * s);
-                let nonce_shares: [Vec<S>; BATCH_SIZE] = nonces.map(|nonce| {
-                    mock_shares(&mut rng, nonce, t, n)
-                        .iter()
-                        .map(|s| s.value)
-                        .collect_vec()
-                });
+                let nonces = (0..batch_size_per_weight)
+                    .map(|_| S::rand(&mut rng))
+                    .collect_vec();
+                let public_keys = nonces.iter().map(|s| G::generator() * s).collect_vec();
+                let nonce_shares: Vec<Vec<S>> = nonces
+                    .iter()
+                    .map(|&nonce| {
+                        mock_shares(&mut rng, nonce, t, n)
+                            .iter()
+                            .map(|s| s.value)
+                            .collect_vec()
+                    })
+                    .collect_vec();
                 (nonces, public_keys, nonce_shares)
             })
             .collect_vec();
 
         let outputs = (0..n)
             .map(|i| {
-                let index = ShareIndex::new(i + 1).unwrap();
-                (0..n)
+                (0..n as usize)
                     .map(|j| {
                         batch_avss::ReceiverOutput {
                             my_shares: SharesForNode {
-                                batches: vec![ShareBatch {
-                                    index,
-                                    shares: array::from_fn(|l| {
-                                        nonces_for_dealer[j as usize].2[l][i as usize]
-                                    }),
+                                shares: vec![ShareBatch {
+                                    batch: (0..batch_size_per_weight as usize)
+                                        .map(|l| nonces_for_dealer[j].2[l][i as usize])
+                                        .collect_vec(),
                                     blinding_share: Default::default(), // Not used for this test
                                 }],
                             },
-                            public_keys: nonces_for_dealer[j as usize].1,
+                            public_keys: nonces_for_dealer[j].1.clone(),
                         }
                     })
                     .collect_vec()
@@ -709,14 +806,24 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, output)| {
+                let indices = [ShareIndex::new(i as u16 + 1).unwrap()];
                 Presignatures::new(
-                    &[ShareIndex::new((i + 1) as u16).unwrap()],
-                    output,
-                    f as usize,
+                    output
+                        .into_iter()
+                        .map(|o| o.into_legacy(&indices))
+                        .collect(),
+                    batch_size_per_weight,
+                    Parameters { t, f },
+                    false,
                 )
                 .unwrap()
             })
             .collect_vec();
+
+        assert_eq!(
+            presigning[0].len(),
+            batch_size_per_weight as usize * (n - f) as usize
+        );
 
         let message = b"Hello, world!";
 
@@ -731,7 +838,7 @@ mod tests {
                 };
                 generate_partial_signatures(
                     message,
-                    presigning,
+                    presigning.next().unwrap(),
                     &beacon_value,
                     &my_shares,
                     &vk_element,
@@ -741,11 +848,12 @@ mod tests {
             })
             .collect_vec();
 
-        assert!(partial_signatures
-            .iter()
-            .map(|partial_signature| partial_signature.0)
-            .all_equal());
-        let public = partial_signatures[0].0;
+        let public = get_uniform_value(
+            partial_signatures
+                .iter()
+                .map(|partial_signature| partial_signature.0),
+        )
+        .unwrap();
 
         let signature = aggregate_signatures(
             message,
@@ -763,6 +871,7 @@ mod tests {
 
         // Check that this produced a valid signature
         derive_verifying_key(&vk_element, &address)
+            .unwrap()
             .verify(message, &signature)
             .unwrap();
     }

@@ -9,12 +9,12 @@ use crate::bn254::zk_login::fetch_jwks;
 use crate::bn254::{
     utils::{gen_address_seed, get_proof},
     zk_login::{JwkId, OIDCProvider, ZkLoginInputs, JWK},
-    zk_login_api::{verify_zk_login, ZkLoginEnv},
+    zk_login_api::{verify_zk_login, ZkLoginCircuitMode, ZkLoginEnv},
 };
 use ark_std::rand::{rngs::StdRng, SeedableRng};
 use fastcrypto::jwt_utils::parse_and_validate_jwt;
 use fastcrypto::{ed25519::Ed25519KeyPair, traits::KeyPair};
-use im::HashMap as ImHashMap;
+use imbl::HashMap as ImHashMap;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use test_strategy::proptest;
@@ -46,6 +46,7 @@ async fn test_end_to_end_twitch() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Test,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res.is_ok());
 
@@ -56,6 +57,7 @@ async fn test_end_to_end_twitch() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Prod,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res_prod.is_err());
 }
@@ -88,6 +90,7 @@ async fn test_end_to_end_kakao() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Test,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res.is_ok());
 
@@ -98,6 +101,7 @@ async fn test_end_to_end_kakao() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Prod,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res_prod.is_err());
 }
@@ -129,6 +133,7 @@ async fn test_end_to_end_apple() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Test,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res.is_ok());
 
@@ -139,6 +144,7 @@ async fn test_end_to_end_apple() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Prod,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res_prod.is_err());
 }
@@ -170,6 +176,7 @@ async fn test_end_to_end_slack() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Test,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res.is_ok());
 
@@ -180,6 +187,7 @@ async fn test_end_to_end_slack() {
         &eph_pubkey,
         &map,
         &ZkLoginEnv::Prod,
+        ZkLoginCircuitMode::V1Only,
     );
     assert!(res_prod.is_err());
 }
@@ -229,6 +237,7 @@ async fn test_end_to_end_all_providers() {
             &eph_pubkey,
             &map,
             &ZkLoginEnv::Test,
+            ZkLoginCircuitMode::V1Only,
         );
         assert!(res.is_ok());
 
@@ -239,6 +248,7 @@ async fn test_end_to_end_all_providers() {
             &eph_pubkey,
             &map,
             &ZkLoginEnv::Prod,
+            ZkLoginCircuitMode::V1Only,
         );
         assert!(res_prod.is_err());
     }
@@ -277,6 +287,7 @@ async fn get_test_inputs(parsed_token: &str) -> (u64, Vec<u8>, ZkLoginInputs) {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct TestIssuerJWTResponse {
     jwt: String,
 }
@@ -362,8 +373,48 @@ async fn test_end_to_end_test_issuer(test_input: TestInputStruct) {
             &eph_pk_bytes,
             &map,
             &ZkLoginEnv::Test,
+            ZkLoginCircuitMode::V1Only,
         );
         assert!(res.is_ok());
     }
     .await;
+}
+
+#[tokio::test]
+async fn test_get_jwks() {
+    let client = reqwest::Client::new();
+    for p in [
+        OIDCProvider::Facebook,
+        OIDCProvider::Google,
+        OIDCProvider::Twitch,
+        OIDCProvider::Slack,
+        OIDCProvider::Kakao,
+        OIDCProvider::Apple,
+        OIDCProvider::Microsoft,
+        OIDCProvider::KarrierOne,
+        // OIDCProvider::Credenza3, // TODO: disabling until Cloudflare challenge is removed from JWK endpoint
+        OIDCProvider::Playtron,
+        OIDCProvider::Threedos,
+        OIDCProvider::Onefc,
+        // OIDCProvider::FanTV, // TODO: disabling until the service is up again
+        // OIDCProvider::Arden, // TODO: disabling until the service is up again
+        OIDCProvider::EveFrontier,
+        OIDCProvider::TestEveFrontier,
+        OIDCProvider::AwsTenant(("eu-west-3".to_string(), "eu-west-3_gGVCx53Es".to_string())), //Trace
+        OIDCProvider::AwsTenant((
+            "ap-southeast-1".to_string(),
+            "ap-southeast-1_2QQPyQXDz".to_string(),
+        )), // Decot
+    ] {
+        let res = fetch_jwks(&p, &client, true).await;
+        assert!(
+            res.is_ok(),
+            "fetch_jwks failed for {:?}: {:?}",
+            p,
+            res.err()
+        );
+        res.unwrap().iter().for_each(|e| {
+            assert_eq!(e.0.iss, p.get_config().iss);
+        });
+    }
 }

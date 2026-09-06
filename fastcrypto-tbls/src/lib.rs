@@ -14,11 +14,10 @@
 pub mod dkg_v1;
 pub mod dl_verification;
 pub mod ecies_v1;
+pub mod knapsack_weight_reduction;
 pub mod mocked_dkg;
-pub mod nizk;
 pub mod nodes;
 pub mod polynomial;
-pub mod random_oracle;
 pub mod tbls;
 pub mod threshold_schnorr;
 pub mod types;
@@ -51,11 +50,17 @@ pub mod dkg_v1_tests;
 #[path = "tests/nodes_tests.rs"]
 pub mod nodes_tests;
 
+#[cfg(test)]
+#[path = "tests/knapsack_weight_reduction_tests.rs"]
+pub mod knapsack_weight_reduction_tests;
+
 // TODO: needs to use ecies_v1
 // #[cfg(test)]
 // #[path = "tests/nidkg_tests.rs"]
 // pub mod nidkg_tests;
 
+pub mod nizk;
 #[cfg(test)]
 #[path = "tests/nizk_tests.rs"]
 pub mod nizk_tests;
+pub mod random_oracle;

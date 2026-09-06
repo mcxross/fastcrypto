@@ -3,7 +3,8 @@
 
 use crate::bn254::verifier::PreparedVerifyingKey;
 use crate::bn254::{FieldElement, Proof, VerifyingKey};
-use fastcrypto::error::FastCryptoError;
+use crate::groth16;
+use fastcrypto::error::{FastCryptoError, FastCryptoResult};
 
 #[cfg(test)]
 #[path = "unit_tests/api_tests.rs"]
@@ -29,7 +30,10 @@ pub fn verify_groth16_in_bytes(
     proof_public_inputs_as_bytes: &[u8],
     proof_points_as_bytes: &[u8],
 ) -> Result<bool, FastCryptoError> {
-    if proof_public_inputs_as_bytes.len() % SCALAR_SIZE != 0 {
+    if !proof_public_inputs_as_bytes
+        .len()
+        .is_multiple_of(SCALAR_SIZE)
+    {
         return Err(FastCryptoError::InputLengthWrong(SCALAR_SIZE));
     }
 
@@ -53,4 +57,12 @@ pub fn verify_groth16(
     let proof = Proof::deserialize(proof_points_as_bytes)?;
     let public_inputs = FieldElement::deserialize_vector(proof_public_inputs_as_bytes)?;
     pvk.verify(&public_inputs, &proof)
+}
+
+/// Given the length of a verifying key in Arkworks format, compute the number of public inputs
+/// for circuits, this verifying key can be used for.
+///
+/// If the length cannot be of a valid verifying key, return an [FastCryptoError::InvalidInput] error.
+pub fn get_public_inputs_num(vk_length_in_bytes: usize) -> FastCryptoResult<usize> {
+    groth16::api::get_public_inputs_num(32, 64, vk_length_in_bytes)
 }

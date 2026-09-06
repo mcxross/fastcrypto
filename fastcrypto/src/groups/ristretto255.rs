@@ -1,79 +1,202 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Implementations of the [ristretto255 group](https://www.ietf.org/archive/id/draft-irtf-cfrg-ristretto255-decaf448-03.html) which is a group of
+//! Implementations of the [ristretto255 group](https://www.rfc-editor.org/rfc/rfc9496.html) which is a group of
 //! prime order 2^{252} + 27742317777372353535851937790883648493 built over Curve25519.
 
+use crate::error::FastCryptoError::InvalidInput;
 use crate::error::FastCryptoResult;
 use crate::groups::{
-    Doubling, FiatShamirChallenge, GroupElement, HashToGroupElement, MultiScalarMul, Scalar,
+    Doubling, FiatShamirChallenge, FromTrustedByteArray, GroupElement, HashToGroupElement,
+    MixedMultiScalarMul, MultiScalarMul, PrecomputableMultiScalarMul, Scalar,
 };
-use crate::hash::Sha512;
+use crate::hash::{Blake2b256, ReverseWrapper, Sha512};
 use crate::serde_helpers::ToFromByteArray;
 use crate::traits::AllowedRng;
 use crate::{
     error::FastCryptoError, hash::HashFunction, serialize_deserialize_with_to_from_byte_array,
 };
-use curve25519_dalek_ng;
-use curve25519_dalek_ng::constants::{BASEPOINT_ORDER, RISTRETTO_BASEPOINT_POINT};
-use curve25519_dalek_ng::ristretto::CompressedRistretto as ExternalCompressedRistrettoPoint;
-use curve25519_dalek_ng::ristretto::RistrettoPoint as ExternalRistrettoPoint;
-use curve25519_dalek_ng::scalar::Scalar as ExternalRistrettoScalar;
-use curve25519_dalek_ng::traits::{Identity, VartimeMultiscalarMul};
-use derive_more::{Add, Div, From, Neg, Sub};
+use curve25519_dalek;
+use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+use curve25519_dalek::ristretto::RistrettoPoint as ExternalPoint;
+use curve25519_dalek::ristretto::VartimeRistrettoPrecomputation;
+use curve25519_dalek::scalar::Scalar as ExternalScalar;
+use curve25519_dalek::traits::{Identity, VartimeMultiscalarMul, VartimePrecomputedMultiscalarMul};
+use derive_more::{Add, From, Mul, Neg, Sub};
+use elliptic_curve::group::GroupEncoding;
+use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
+use elliptic_curve::{Field, Group};
 use fastcrypto_derive::GroupOpsExtend;
-use std::ops::{Add, Div, Mul};
+use std::ops::{Div, Mul};
 use zeroize::Zeroize;
 
-const RISTRETTO_POINT_BYTE_LENGTH: usize = 32;
-const RISTRETTO_SCALAR_BYTE_LENGTH: usize = 32;
+pub const RISTRETTO_POINT_BYTE_LENGTH: usize = 32;
+pub const RISTRETTO_SCALAR_BYTE_LENGTH: usize = 32;
+pub const DST: &[u8] = b"ristretto255_XMD:SHA-512_R255MAP_RO_";
 
 /// Represents a point in the Ristretto group for Curve25519.
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, From, Add, Sub, Neg, GroupOpsExtend)]
-pub struct RistrettoPoint(ExternalRistrettoPoint);
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Add, Sub, Neg, GroupOpsExtend)]
+pub struct RistrettoPoint(pub(crate) ExternalPoint);
 
 impl RistrettoPoint {
     /// Construct a RistrettoPoint from the given data using a Ristretto-flavoured Elligator 2 map.
     /// If the input bytes are uniformly distributed, the resulting point will be uniformly
     /// distributed over the Ristretto group.
+    ///
+    /// This is called `ristretto255_map` in RFC 9380 and is defined in [RFC 9496, Section 4.3.4](https://www.rfc-editor.org/rfc/rfc9496.html#section-4.3.4).
     pub fn from_uniform_bytes(bytes: &[u8; 64]) -> Self {
-        RistrettoPoint::from(ExternalRistrettoPoint::from_uniform_bytes(bytes))
+        RistrettoPoint(ExternalPoint::from_uniform_bytes(bytes))
     }
 
-    /// Construct a RistrettoPoint from the given data using a given hash function.
-    pub fn map_to_point<H: HashFunction<64>>(bytes: &[u8]) -> Self {
-        Self::from_uniform_bytes(&H::digest(bytes).digest)
+    /// Implementation of `hash_to_ristretto255` using the `ristretto255_XMD:SHA-512_R255MAP_RO_` suite,
+    /// following the specifications in [RFC 9380](https://www.rfc-editor.org/rfc/rfc9380.html#appendix-B).
+    pub fn hash_to_ristretto255(msg: &[u8]) -> Self {
+        Self::hash_to_ristretto255_with_dst(&[msg], DST)
     }
 
-    /// Return this point in compressed form.
-    pub fn compress(&self) -> [u8; 32] {
-        self.0.compress().0
+    /// Map a message to a [RistrettoPoint] following [RFC 9380](https://www.rfc-editor.org/rfc/rfc9380.html#appendix-B)
+    /// using `expand_message_xmd` with SHA-512 and the given domain separation tag.
+    pub fn hash_to_ristretto255_with_dst(msgs: &[&[u8]], dst: &[u8]) -> Self {
+        let mut bytes = [0u8; 64];
+        // expand_message only errors if the output length is out of bounds, which it is not here
+        // since it is a constant, so we can safely unwrap.
+        ExpandMsgXmd::<<Sha512 as ReverseWrapper>::Variant>::expand_message(msgs, &[dst], 64)
+            .unwrap()
+            .fill_bytes(&mut bytes);
+        Self::from_uniform_bytes(&bytes)
     }
 
-    /// Return this point in compressed form.
-    pub fn decompress(bytes: &[u8; 32]) -> Result<Self, FastCryptoError> {
-        RistrettoPoint::try_from(bytes.as_slice())
+    /// Build precomputation tables for `points` under `strategy`;
+    /// [PrecomputableMultiScalarMul::precompute] uses `MixedMsmStrategy::default()`.
+    pub fn precompute_with_strategy(
+        points: &[Self],
+        strategy: MixedMsmStrategy,
+    ) -> FastCryptoResult<RistrettoPrecomputation> {
+        let points: Vec<ExternalPoint> = points.iter().map(|p| p.0).collect();
+        let tables = strategy
+            .use_tables(points.len(), 0)
+            .then(|| VartimeRistrettoPrecomputation::new(points.iter()));
+        Ok(RistrettoPrecomputation {
+            tables,
+            points,
+            strategy,
+        })
     }
 }
 
 impl Doubling for RistrettoPoint {
     fn double(self) -> Self {
-        Self(self.0.add(self.0))
+        Self(self.0.double())
     }
 }
 
 impl MultiScalarMul for RistrettoPoint {
     fn multi_scalar_mul(scalars: &[Self::ScalarType], points: &[Self]) -> FastCryptoResult<Self> {
         if scalars.len() != points.len() {
-            return Err(FastCryptoError::InvalidInput);
+            return Err(InvalidInput);
         }
 
-        Ok(RistrettoPoint(
-            ExternalRistrettoPoint::vartime_multiscalar_mul(
-                scalars.iter().map(|s| s.0),
-                points.iter().map(|g| g.0),
+        Ok(RistrettoPoint(ExternalPoint::vartime_multiscalar_mul(
+            scalars.iter().map(|s| s.0),
+            points.iter().map(|g| g.0),
+        )))
+    }
+}
+
+/// Rule choosing, per call, between Straus over the precomputed tables and a
+/// plain MSM over all points: Straus while
+/// `num_static + dynamic_point_weight * num_dynamic <= max_weighted_points`;
+/// tables are only built if the static points alone satisfy the rule.
+/// `max_weighted_points = 0` never builds tables; `dynamic_point_weight = 0`
+/// with a large bound always uses them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MixedMsmStrategy {
+    pub max_weighted_points: usize,
+    pub dynamic_point_weight: usize,
+}
+
+impl Default for MixedMsmStrategy {
+    /// Constants measured with dense scalars on an Apple M2 Max using
+    /// `benches/mixed_msm.rs`; recalibrate with the bench where the machine
+    /// matters.
+    fn default() -> Self {
+        Self {
+            max_weighted_points: 600,
+            dynamic_point_weight: 3,
+        }
+    }
+}
+
+impl MixedMsmStrategy {
+    fn use_tables(self, num_static: usize, num_dynamic: usize) -> bool {
+        self.dynamic_point_weight
+            .saturating_mul(num_dynamic)
+            .saturating_add(num_static)
+            <= self.max_weighted_points
+    }
+}
+
+/// Precomputed multiplication tables over a fixed set of Ristretto points;
+/// the points themselves are kept for the plain-MSM fallback chosen by the
+/// strategy.
+pub struct RistrettoPrecomputation {
+    tables: Option<VartimeRistrettoPrecomputation>,
+    points: Vec<ExternalPoint>,
+    strategy: MixedMsmStrategy,
+}
+
+impl RistrettoPrecomputation {
+    pub fn strategy(&self) -> MixedMsmStrategy {
+        self.strategy
+    }
+}
+
+impl PrecomputableMultiScalarMul for RistrettoPoint {
+    type Precomputation = RistrettoPrecomputation;
+
+    fn precompute(points: &[Self]) -> FastCryptoResult<Self::Precomputation> {
+        Self::precompute_with_strategy(points, MixedMsmStrategy::default())
+    }
+}
+
+impl MixedMultiScalarMul for RistrettoPrecomputation {
+    type Point = RistrettoPoint;
+
+    fn num_static_points(&self) -> usize {
+        self.points.len()
+    }
+
+    fn mixed_multi_scalar_mul(
+        &self,
+        static_scalars: &[RistrettoScalar],
+        dynamic_scalars: &[RistrettoScalar],
+        dynamic_points: &[RistrettoPoint],
+    ) -> FastCryptoResult<RistrettoPoint> {
+        if static_scalars.len() != self.points.len()
+            || dynamic_scalars.len() != dynamic_points.len()
+        {
+            return Err(InvalidInput);
+        }
+        Ok(RistrettoPoint(match &self.tables {
+            Some(tables)
+                if self
+                    .strategy
+                    .use_tables(self.points.len(), dynamic_points.len()) =>
+            {
+                tables.vartime_mixed_multiscalar_mul(
+                    static_scalars.iter().map(|s| s.0),
+                    dynamic_scalars.iter().map(|s| s.0),
+                    dynamic_points.iter().map(|p| p.0),
+                )
+            }
+            _ => ExternalPoint::vartime_multiscalar_mul(
+                static_scalars.iter().chain(dynamic_scalars).map(|s| s.0),
+                self.points
+                    .iter()
+                    .copied()
+                    .chain(dynamic_points.iter().map(|p| p.0)),
             ),
-        ))
+        }))
     }
 }
 
@@ -82,8 +205,7 @@ impl Div<RistrettoScalar> for RistrettoPoint {
     type Output = Result<Self, FastCryptoError>;
 
     fn div(self, rhs: RistrettoScalar) -> Self::Output {
-        let inv = rhs.inverse()?;
-        Ok(self * inv)
+        rhs.inverse().map(|inv| self * inv)
     }
 }
 
@@ -91,7 +213,7 @@ impl Mul<RistrettoScalar> for RistrettoPoint {
     type Output = RistrettoPoint;
 
     fn mul(self, rhs: RistrettoScalar) -> RistrettoPoint {
-        RistrettoPoint::from(self.0 * rhs.0)
+        RistrettoPoint(self.0 * rhs.0)
     }
 }
 
@@ -99,75 +221,64 @@ impl GroupElement for RistrettoPoint {
     type ScalarType = RistrettoScalar;
 
     fn zero() -> RistrettoPoint {
-        RistrettoPoint::from(ExternalRistrettoPoint::identity())
+        RistrettoPoint(<curve25519_dalek::RistrettoPoint as Identity>::identity())
     }
 
     fn generator() -> Self {
-        RistrettoPoint::from(RISTRETTO_BASEPOINT_POINT)
-    }
-}
-
-impl TryFrom<&[u8]> for RistrettoPoint {
-    type Error = FastCryptoError;
-
-    /// Decode a ristretto point in compressed binary form.
-    fn try_from(bytes: &[u8]) -> Result<Self, FastCryptoError> {
-        let point = ExternalCompressedRistrettoPoint::from_slice(bytes);
-        let decompressed_point = point.decompress().ok_or(FastCryptoError::InvalidInput)?;
-        Ok(RistrettoPoint::from(decompressed_point))
+        RistrettoPoint(RISTRETTO_BASEPOINT_POINT)
     }
 }
 
 impl HashToGroupElement for RistrettoPoint {
+    /// Hash the message using SHA-512 without any DST and derive a point as defined in [Self::from_uniform_bytes].
     fn hash_to_group_element(msg: &[u8]) -> Self {
-        RistrettoPoint::map_to_point::<Sha512>(msg)
+        Self::from_uniform_bytes(&Sha512::digest(msg).digest)
     }
 }
 
 impl ToFromByteArray<RISTRETTO_POINT_BYTE_LENGTH> for RistrettoPoint {
-    fn from_byte_array(bytes: &[u8; RISTRETTO_POINT_BYTE_LENGTH]) -> Result<Self, FastCryptoError> {
-        Self::try_from(bytes.as_slice())
+    fn from_byte_array(bytes: &[u8; RISTRETTO_POINT_BYTE_LENGTH]) -> FastCryptoResult<Self> {
+        ExternalPoint::from_bytes(bytes)
+            .map(RistrettoPoint)
+            .into_option()
+            .ok_or(InvalidInput)
     }
 
     fn to_byte_array(&self) -> [u8; RISTRETTO_POINT_BYTE_LENGTH] {
-        self.compress()
+        self.0.compress().0
+    }
+}
+
+impl FromTrustedByteArray<RISTRETTO_POINT_BYTE_LENGTH> for RistrettoPoint {
+    fn from_trusted_byte_array(
+        bytes: &[u8; RISTRETTO_POINT_BYTE_LENGTH],
+    ) -> FastCryptoResult<Self> {
+        // Note that the external crate does not distinguish between from_bytes and from_bytes_unchecked:
+        // https://github.com/dalek-cryptography/curve25519-dalek/blob/11f5375375d3d52c153049f18bd8b1b7669c2565/curve25519-dalek/src/ristretto.rs#L1221-L1224
+        ExternalPoint::from_bytes_unchecked(bytes)
+            .map(RistrettoPoint)
+            .into_option()
+            .ok_or(InvalidInput)
     }
 }
 
 serialize_deserialize_with_to_from_byte_array!(RistrettoPoint);
 
 /// Represents a scalar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, From, Add, Sub, Neg, Div, GroupOpsExtend, Zeroize)]
-pub struct RistrettoScalar(ExternalRistrettoScalar);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, From, Add, Sub, Mul, Neg, GroupOpsExtend, Zeroize)]
+#[mul(forward)]
+#[from(forward)]
+pub struct RistrettoScalar(pub(crate) ExternalScalar);
 
 impl RistrettoScalar {
-    /// The order of the base point.
-    pub fn group_order() -> RistrettoScalar {
-        RistrettoScalar(BASEPOINT_ORDER)
-    }
-
     /// Construct a [RistrettoScalar] by reducing a 64-byte little-endian integer modulo the group order.
     pub fn from_bytes_mod_order_wide(bytes: &[u8; 64]) -> Self {
-        RistrettoScalar(ExternalRistrettoScalar::from_bytes_mod_order_wide(bytes))
+        RistrettoScalar(ExternalScalar::from_bytes_mod_order_wide(bytes))
     }
 
     /// Construct a [RistrettoScalar] by reducing a 32-byte little-endian integer modulo the group order.
     pub fn from_bytes_mod_order(bytes: &[u8; 32]) -> Self {
-        RistrettoScalar(ExternalRistrettoScalar::from_bytes_mod_order(*bytes))
-    }
-}
-
-impl From<u128> for RistrettoScalar {
-    fn from(value: u128) -> RistrettoScalar {
-        RistrettoScalar(ExternalRistrettoScalar::from(value))
-    }
-}
-
-impl Mul<RistrettoScalar> for RistrettoScalar {
-    type Output = RistrettoScalar;
-
-    fn mul(self, rhs: RistrettoScalar) -> RistrettoScalar {
-        RistrettoScalar::from(self.0 * rhs.0)
+        RistrettoScalar(ExternalScalar::from_bytes_mod_order(*bytes))
     }
 }
 
@@ -176,8 +287,7 @@ impl Div<RistrettoScalar> for RistrettoScalar {
     type Output = Result<RistrettoScalar, FastCryptoError>;
 
     fn div(self, rhs: RistrettoScalar) -> Result<RistrettoScalar, FastCryptoError> {
-        let inv = rhs.inverse()?;
-        Ok(self * inv)
+        rhs.inverse().map(|inv| self * inv)
     }
 }
 
@@ -185,23 +295,23 @@ impl GroupElement for RistrettoScalar {
     type ScalarType = Self;
 
     fn zero() -> Self {
-        RistrettoScalar::from(ExternalRistrettoScalar::zero())
+        RistrettoScalar(ExternalScalar::ZERO)
     }
     fn generator() -> Self {
-        RistrettoScalar::from(ExternalRistrettoScalar::one())
+        RistrettoScalar(ExternalScalar::ONE)
     }
 }
 
 impl Scalar for RistrettoScalar {
     fn rand<R: AllowedRng>(rng: &mut R) -> Self {
-        Self(ExternalRistrettoScalar::random(rng))
+        Self(ExternalScalar::random(rng))
     }
 
     fn inverse(&self) -> FastCryptoResult<Self> {
-        if self.0 == ExternalRistrettoScalar::zero() {
-            return Err(FastCryptoError::InvalidInput);
+        if self.0.is_zero().into() {
+            return Err(InvalidInput);
         }
-        Ok(RistrettoScalar::from(self.0.invert()))
+        Ok(RistrettoScalar(self.0.invert()))
     }
 }
 
@@ -213,7 +323,10 @@ impl HashToGroupElement for RistrettoScalar {
 
 impl FiatShamirChallenge for RistrettoScalar {
     fn fiat_shamir_reduction_to_group_element(msg: &[u8]) -> Self {
-        Self::hash_to_group_element(msg)
+        // Matches Contra's Move/TS Fiat-Shamir construction.
+        let mut digest = Blake2b256::digest(msg).digest;
+        digest[RISTRETTO_SCALAR_BYTE_LENGTH - 1] = 0;
+        Self::from_byte_array(&digest).expect("Top byte is zero so the scalar is always canonical")
     }
 }
 
@@ -221,14 +334,22 @@ impl ToFromByteArray<RISTRETTO_SCALAR_BYTE_LENGTH> for RistrettoScalar {
     fn from_byte_array(
         bytes: &[u8; RISTRETTO_SCALAR_BYTE_LENGTH],
     ) -> Result<Self, FastCryptoError> {
-        Ok(RistrettoScalar(
-            ExternalRistrettoScalar::from_canonical_bytes(*bytes)
-                .ok_or(FastCryptoError::InvalidInput)?,
-        ))
+        ExternalScalar::from_canonical_bytes(*bytes)
+            .map(RistrettoScalar)
+            .into_option()
+            .ok_or(InvalidInput)
     }
 
     fn to_byte_array(&self) -> [u8; RISTRETTO_SCALAR_BYTE_LENGTH] {
         self.0.to_bytes()
+    }
+}
+
+impl FromTrustedByteArray<RISTRETTO_SCALAR_BYTE_LENGTH> for RistrettoScalar {
+    fn from_trusted_byte_array(
+        bytes: &[u8; RISTRETTO_SCALAR_BYTE_LENGTH],
+    ) -> FastCryptoResult<Self> {
+        Ok(Self::from_bytes_mod_order(bytes))
     }
 }
 

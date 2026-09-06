@@ -7,7 +7,8 @@ members = [
     "fastcrypto-zkp",
     "fastcrypto-cli",
     "fastcrypto-vdf",
-    "kotlin/lib"
+    "fastcrypto-pq",
+    "kotlin/lib",
 ]
 
 # Dependencies that should be kept in sync through the whole workspace

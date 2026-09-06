@@ -46,6 +46,14 @@ pub trait GroupElement:
     fn sum(terms: impl Iterator<Item = Self>) -> Self {
         terms.fold(Self::zero(), |acc, x| acc + x)
     }
+
+    /// Compute the inner product of two iterators. The sum stops when the shortest iterator ends.
+    fn inner_product<B: IntoIterator<Item = Self::ScalarType>>(
+        a: impl IntoIterator<Item = Self>,
+        b: B,
+    ) -> Self {
+        Self::sum(a.into_iter().zip(b).map(|(a, b)| a * b))
+    }
 }
 
 // TODO: Move Serialize + DeserializeOwned to GroupElement.
@@ -112,7 +120,7 @@ pub trait FiatShamirChallenge {
 }
 
 /// Trait for groups that have a standardized "hash_to_point"/"hash_to_curve" function (see
-/// [https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve#section-3].
+/// [RFC 9380, section 3](https://www.rfc-editor.org/rfc/rfc9380.html#section-3)).
 pub trait HashToGroupElement {
     /// Hashes the given message and maps the result to a group element.
     fn hash_to_group_element(msg: &[u8]) -> Self;
@@ -123,7 +131,51 @@ pub trait MultiScalarMul: GroupElement {
     fn multi_scalar_mul(scalars: &[Self::ScalarType], points: &[Self]) -> FastCryptoResult<Self>;
 }
 
-/// Faster deserialization in case the input is trusted (otherwise it can be insecure).
+/// Trait for groups that support multi-scalar multiplication with precomputed
+/// tables over a fixed set of points, trading memory for speed when the same
+/// points (e.g. a commitment key) are used in many multi-scalar multiplications.
+pub trait PrecomputableMultiScalarMul: GroupElement {
+    /// Precomputed tables for a fixed set of points.
+    type Precomputation: MixedMultiScalarMul<Point = Self>;
+
+    /// Build precomputation tables for `points`. When the tables are used is
+    /// implementation-specific; an implementation may offer a constructor
+    /// that configures this.
+    fn precompute(points: &[Self]) -> FastCryptoResult<Self::Precomputation>;
+}
+
+/// Trait for the precomputed tables built by [PrecomputableMultiScalarMul::precompute].
+pub trait MixedMultiScalarMul {
+    /// The group whose points the tables were built for.
+    type Point: GroupElement;
+
+    /// The number of points these tables were built for.
+    fn num_static_points(&self) -> usize;
+
+    /// Compute the mixed multi-scalar multiplication
+    ///
+    /// `a_1*P_1 + ... + a_n*P_n + b_1*Q_1 + ... + b_m*Q_m`,
+    ///
+    /// where the `P_i` are the `n` static points these tables were built for,
+    /// and the `Q_j` are the `m` dynamic points freshly supplied on every
+    /// call. `static_scalars` holds the `a_i` and must have length `n`;
+    /// `dynamic_scalars` holds the `b_j` and must have length `m`. The scalar
+    /// multiplication `a_i*P_i` is evaluated via the precomputed tables, so
+    /// when the `P_i` are reused across many calls this is faster than a regular
+    /// MSM over all `n + m` points. This only holds up to a size that depends on the
+    /// implementation; above it the implementation falls back to a regular MSM
+    /// itself, so callers need not choose.
+    fn mixed_multi_scalar_mul(
+        &self,
+        static_scalars: &[<Self::Point as GroupElement>::ScalarType],
+        dynamic_scalars: &[<Self::Point as GroupElement>::ScalarType],
+        dynamic_points: &[Self::Point],
+    ) -> FastCryptoResult<Self::Point>;
+}
+
+/// Faster deserialization that skips validation of the result: the subgroup membership check for
+/// curve points and the canonical range check for scalars. Only safe for trusted input; otherwise
+/// use [`crate::serde_helpers::ToFromByteArray::from_byte_array`].
 pub trait FromTrustedByteArray<const LENGTH: usize>: Sized {
     fn from_trusted_byte_array(bytes: &[u8; LENGTH]) -> FastCryptoResult<Self>;
 }

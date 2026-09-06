@@ -32,10 +32,6 @@ pub mod secp256r1_recoverable_tests;
 #[path = "tests/bls12381_tests.rs"]
 pub mod bls12381_tests;
 
-#[cfg(all(test, feature = "experimental"))]
-#[path = "tests/bulletproofs_tests.rs"]
-pub mod bulletproofs_tests;
-
 #[cfg(all(test, feature = "aes"))]
 #[path = "tests/aes_tests.rs"]
 pub mod aes_tests;
@@ -97,7 +93,6 @@ pub mod traits;
 #[cfg(feature = "aes")]
 pub mod aes;
 pub mod bls12381;
-#[cfg(feature = "experimental")]
 pub mod bulletproofs;
 pub mod ed25519;
 pub mod encoding;
@@ -107,20 +102,18 @@ pub mod hash;
 pub mod hmac;
 pub mod jwt_utils;
 pub mod merkle;
+pub mod nitro_attestation;
+pub mod nizk;
+pub mod pedersen;
 pub mod private_seed;
 pub mod rsa;
 pub mod secp256k1;
 pub mod secp256r1;
 pub mod serde_helpers;
 pub mod signature_service;
+pub mod twisted_elgamal;
 pub mod utils;
 pub mod vrf;
 
-/// This module contains unsecure cryptographic primitives. The purpose of this library is to allow seamless
-/// benchmarking of systems without taking into account the cost of cryptographic primitives - and hence
-/// providing a theoretical maximal throughput that a system could achieve if the cost of crypto is optimized
-/// away.
-///
-/// Warning: All schemes in this file are completely unsafe to use in production.
-#[cfg(feature = "unsecure_schemes")]
-pub mod unsecure;
+#[cfg(feature = "experimental")]
+pub mod bulletproofspp;

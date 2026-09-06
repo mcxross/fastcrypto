@@ -1,25 +1,41 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::encoding::{Encoding, Hex};
+use crate::groups::ristretto255::MixedMsmStrategy;
 use crate::groups::ristretto255::RistrettoPoint;
 use crate::groups::ristretto255::RistrettoScalar;
-use crate::groups::{GroupElement, MultiScalarMul};
+use crate::groups::{
+    GroupElement, HashToGroupElement, MixedMultiScalarMul, MultiScalarMul,
+    PrecomputableMultiScalarMul, Scalar,
+};
 use crate::serde_helpers::ToFromByteArray;
+use hex_literal::hex;
+
+pub(crate) const GROUP_ORDER: [u8; 32] = [
+    237, 211, 245, 92, 26, 99, 18, 88, 214, 156, 247, 162, 222, 249, 222, 20, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 16,
+];
+pub(crate) const GROUP_ORDER_MINUS_ONE: [u8; 32] = [
+    236, 211, 245, 92, 26, 99, 18, 88, 214, 156, 247, 162, 222, 249, 222, 20, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 16,
+];
 
 #[test]
 fn test_arithmetic() {
     // From https://ristretto.group/test_vectors/ristretto255.html
-    let five_bp = RistrettoPoint::try_from(
-        hex::decode("e882b131016b52c1d3337080187cf768423efccbb517bb495ab812c4160ff44e")
+    let five_bp = RistrettoPoint::from_byte_array(
+        &hex::decode("e882b131016b52c1d3337080187cf768423efccbb517bb495ab812c4160ff44e")
             .unwrap()
-            .as_slice(),
+            .try_into()
+            .unwrap(),
     )
     .unwrap();
 
     // Test that different ways of computing [5]G gives the expected result
     let g = RistrettoPoint::generator();
 
-    let p1 = g * RistrettoScalar::from(5);
+    let p1 = g * RistrettoScalar::from(5u64);
     assert_eq!(five_bp, p1);
 
     let p2 = g + g + g + g + g + g - g;
@@ -30,53 +46,76 @@ fn test_arithmetic() {
     assert_eq!(five_bp, p3);
 
     let mut p4 = g;
-    p4 *= RistrettoScalar::from(5);
+    p4 *= RistrettoScalar::from(5u64);
     assert_eq!(five_bp, p4);
 
-    let p5 = g * (RistrettoScalar::from(7) - RistrettoScalar::from(2));
+    let p5 = g * (RistrettoScalar::from(7u64) - RistrettoScalar::from(2u64));
     assert_eq!(five_bp, p5);
 
     assert!((RistrettoPoint::generator() / RistrettoScalar::zero()).is_err());
 
-    // Test the order of the base point
-    assert_ne!(RistrettoPoint::zero(), g);
-    assert_eq!(RistrettoPoint::zero(), g * RistrettoScalar::group_order());
-
     // RistrettoScalar::from_byte_array should accept only canonical representations.
-    assert!(
-        RistrettoScalar::from_byte_array(&RistrettoScalar::group_order().to_byte_array()).is_err()
-    );
-    assert!(RistrettoScalar::from_byte_array(
-        &(RistrettoScalar::group_order() - RistrettoScalar::from(1)).to_byte_array()
-    )
-    .is_ok());
+    assert!(RistrettoScalar::from_byte_array(&GROUP_ORDER).is_err());
+    assert!(RistrettoScalar::from_byte_array(&GROUP_ORDER_MINUS_ONE).is_ok());
 
     // Check that u128 is decoded correctly.
     let x: u128 = 2 << 66;
     let x_scalar = RistrettoScalar::from(x);
-    let in_u64 = x_scalar / RistrettoScalar::from(8);
-    assert_eq!(in_u64.unwrap(), RistrettoScalar::from(2 << 63));
+    let in_u64 = x_scalar / RistrettoScalar::from(8u64);
+    assert_eq!(in_u64.unwrap(), RistrettoScalar::from(2u128 << 63));
+}
+
+#[test]
+fn hash_regression_tests() {
+    let input = b"Random numbers should not be generated with a method chosen at random";
+    let expected_scalar = hex!("9f07ae34b44b42539e3c45be1da015e10369a454b3ffaec9a7bbe1086b6d170d");
+    let expected_point = hex!("baf5aa3b987469509a11b22d069be0731904af04889790cc6bd54d77afbf871d");
+    assert_eq!(
+        RistrettoScalar::hash_to_group_element(input)
+            .to_byte_array()
+            .to_vec(),
+        expected_scalar
+    );
+    assert_eq!(
+        RistrettoPoint::hash_to_group_element(input)
+            .to_byte_array()
+            .to_vec(),
+        expected_point
+    );
+
+    let other_input = b"Any one who considers arithmetical methods of producing random digits is, of course, in a state of sin";
+    assert_ne!(
+        RistrettoScalar::hash_to_group_element(other_input)
+            .to_byte_array()
+            .to_vec(),
+        expected_scalar
+    );
+    assert_ne!(
+        RistrettoPoint::hash_to_group_element(other_input)
+            .to_byte_array()
+            .to_vec(),
+        expected_point
+    );
 }
 
 #[test]
 fn test_serialize_deserialize_element() {
     let p = RistrettoPoint::generator() + RistrettoPoint::generator();
+    let expected =
+        hex!("6a493210f7499cd17fecb510ae0cea23a110e8d5b901f8acadd3095c73a3b919").to_vec();
     let serialized = bincode::serialize(&p).unwrap();
+    assert_eq!(expected, serialized);
     let deserialized: RistrettoPoint = bincode::deserialize(&serialized).unwrap();
     assert_eq!(deserialized, p);
 }
 
 #[test]
-fn test_compress_decompress() {
-    let p = RistrettoPoint::generator() + RistrettoPoint::generator();
-    let compressed = p.compress();
-    let decompressed: RistrettoPoint = RistrettoPoint::decompress(&compressed).unwrap();
-    assert_eq!(decompressed, p);
-}
-
-#[test]
 fn test_vectors() {
-    // Test vectors from draft-irtf-cfrg-ristretto255-decaf448-03
+    // Test vectors for ristretto255 from RFC 9496 (https://www.rfc-editor.org/rfc/rfc9496.html),
+    // which supersedes draft-irtf-cfrg-ristretto255-decaf448-03:
+    // - VEC_MULGEN:  Appendix A.1 (multiples of the generator)
+    // - VEC_INVALID: Appendix A.2 (invalid encodings)
+    // - VEC_MAP:     Appendix A.3 (group elements from uniform byte strings, i.e. from_uniform_bytes)
     const VEC_MULGEN: [&str; 16] = [
         "0000000000000000000000000000000000000000000000000000000000000000",
         "e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76",
@@ -98,7 +137,9 @@ fn test_vectors() {
 
     for (i, item) in VEC_MULGEN.iter().enumerate() {
         let actual = RistrettoPoint::generator() * RistrettoScalar::from(i as u128);
-        let expected = RistrettoPoint::try_from(hex::decode(item).unwrap().as_slice()).unwrap();
+        let expected =
+            RistrettoPoint::from_byte_array(&hex::decode(item).unwrap().try_into().unwrap())
+                .unwrap();
         assert_eq!(expected, actual);
     }
 
@@ -140,7 +181,10 @@ fn test_vectors() {
     ];
 
     for item in VEC_INVALID.iter() {
-        assert!(RistrettoPoint::try_from(hex::decode(item).unwrap().as_slice()).is_err());
+        assert!(
+            RistrettoPoint::from_byte_array(&hex::decode(item).unwrap().try_into().unwrap())
+                .is_err()
+        );
     }
 
     const VEC_MAP: [(&str, &str); 11] = [
@@ -172,7 +216,7 @@ fn test_vectors() {
         let actual =
             RistrettoPoint::from_uniform_bytes(&hex::decode(i).unwrap().try_into().unwrap());
         let expected = hex::decode(o).unwrap();
-        assert_eq!(expected, actual.compress());
+        assert_eq!(expected, actual.to_byte_array());
     }
 }
 
@@ -181,19 +225,173 @@ fn test_multiscalar_mul() {
     let g = RistrettoPoint::generator();
     let h = RistrettoPoint::multi_scalar_mul(
         &[
-            RistrettoScalar::from(1),
-            RistrettoScalar::from(2),
-            RistrettoScalar::from(3),
+            RistrettoScalar::from(1u64),
+            RistrettoScalar::from(2u64),
+            RistrettoScalar::from(3u64),
         ],
         &[g, g, g],
     )
     .unwrap();
-    assert_eq!(g * RistrettoScalar::from(6), h);
+    assert_eq!(g * RistrettoScalar::from(6u64), h);
 
     // Invalid lengths
     assert!(RistrettoPoint::multi_scalar_mul(
-        &[RistrettoScalar::from(1), RistrettoScalar::from(2)],
+        &[RistrettoScalar::from(1u64), RistrettoScalar::from(2u64)],
         &[g, g, g]
     )
     .is_err());
+}
+
+#[test]
+fn test_precomputed_multiscalar_mul() {
+    let mut rng = rand::thread_rng();
+    let rand_scalars = |k: usize, rng: &mut rand::rngs::ThreadRng| -> Vec<RistrettoScalar> {
+        (0..k).map(|_| RistrettoScalar::rand(rng)).collect()
+    };
+    let static_points: Vec<RistrettoPoint> = rand_scalars(5, &mut rng)
+        .iter()
+        .map(|s| RistrettoPoint::generator() * s)
+        .collect();
+    let dynamic_points: Vec<RistrettoPoint> = rand_scalars(3, &mut rng)
+        .iter()
+        .map(|s| RistrettoPoint::generator() * s)
+        .collect();
+    let precomputation = RistrettoPoint::precompute(&static_points).unwrap();
+    assert_eq!(precomputation.num_static_points(), static_points.len());
+
+    // Agrees with the plain MSM over [static_points, dynamic_points], with and
+    // without dynamic terms.
+    for dynamic_len in [3, 0] {
+        let static_scalars = rand_scalars(static_points.len(), &mut rng);
+        let dynamic_scalars = rand_scalars(dynamic_len, &mut rng);
+        let expected = RistrettoPoint::multi_scalar_mul(
+            &[static_scalars.clone(), dynamic_scalars.clone()].concat(),
+            &[
+                static_points.clone(),
+                dynamic_points[..dynamic_len].to_vec(),
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let actual = precomputation
+            .mixed_multi_scalar_mul(
+                &static_scalars,
+                &dynamic_scalars,
+                &dynamic_points[..dynamic_len],
+            )
+            .unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    // Empty precomputed set: the result is the plain MSM over the dynamic
+    // points, and with both sides empty it is the identity. The case of an
+    // empty dynamic side is covered by the loop above.
+    let empty = RistrettoPoint::precompute(&[]).unwrap();
+    assert_eq!(empty.num_static_points(), 0);
+    let dynamic_scalars = rand_scalars(dynamic_points.len(), &mut rng);
+    assert_eq!(
+        empty
+            .mixed_multi_scalar_mul(&[], &dynamic_scalars, &dynamic_points)
+            .unwrap(),
+        RistrettoPoint::multi_scalar_mul(&dynamic_scalars, &dynamic_points).unwrap()
+    );
+    assert_eq!(
+        empty.mixed_multi_scalar_mul(&[], &[], &[]).unwrap(),
+        RistrettoPoint::zero()
+    );
+
+    // Invalid lengths: static scalars not matching the precomputed set, and
+    // mismatched dynamic sides.
+    let s = rand_scalars(6, &mut rng);
+    assert!(precomputation.mixed_multi_scalar_mul(&s, &[], &[]).is_err());
+    assert!(precomputation
+        .mixed_multi_scalar_mul(&s[..4], &[], &[])
+        .is_err());
+    assert!(precomputation
+        .mixed_multi_scalar_mul(&s[..5], &s[..2], &dynamic_points)
+        .is_err());
+
+    // Every strategy and side of its bound gives the same results and length
+    // checks. Under the default strategy: over the bound by static points
+    // alone (no tables built), and by dynamic points alone (tables built but
+    // unused). Under weighted strategies: no tables, tables but a call over
+    // the bound, and tables kept above the default bound.
+    let rand_points = |n: usize, rng: &mut rand::rngs::ThreadRng| -> Vec<RistrettoPoint> {
+        rand_scalars(n, rng)
+            .iter()
+            .map(|s| RistrettoPoint::generator() * s)
+            .collect()
+    };
+    let default = MixedMsmStrategy::default();
+    let many_static = rand_points(default.max_weighted_points + 1, &mut rng);
+    let many_dynamic = rand_points(
+        default.max_weighted_points / default.dynamic_point_weight,
+        &mut rng,
+    );
+    let never = MixedMsmStrategy {
+        max_weighted_points: 0,
+        dynamic_point_weight: 0,
+    };
+    let tight = MixedMsmStrategy {
+        max_weighted_points: static_points.len(),
+        dynamic_point_weight: 1,
+    };
+    let always = MixedMsmStrategy {
+        max_weighted_points: usize::MAX,
+        dynamic_point_weight: 0,
+    };
+    for (strategy, static_points, dynamic_points) in [
+        (default, &many_static, &dynamic_points),
+        (default, &many_static, &Vec::new()),
+        (default, &static_points, &many_dynamic),
+        (never, &static_points, &dynamic_points),
+        (tight, &static_points, &dynamic_points),
+        (always, &many_static, &dynamic_points),
+    ] {
+        let precomputation =
+            RistrettoPoint::precompute_with_strategy(static_points, strategy).unwrap();
+        assert_eq!(precomputation.strategy(), strategy);
+        assert_eq!(precomputation.num_static_points(), static_points.len());
+        let static_scalars = rand_scalars(static_points.len(), &mut rng);
+        let dynamic_scalars = rand_scalars(dynamic_points.len(), &mut rng);
+        let expected = RistrettoPoint::multi_scalar_mul(
+            &[static_scalars.clone(), dynamic_scalars.clone()].concat(),
+            &[static_points.clone(), dynamic_points.clone()].concat(),
+        )
+        .unwrap();
+        let actual = precomputation
+            .mixed_multi_scalar_mul(&static_scalars, &dynamic_scalars, dynamic_points)
+            .unwrap();
+        assert_eq!(expected, actual);
+        assert!(precomputation
+            .mixed_multi_scalar_mul(&static_scalars[1..], &dynamic_scalars, dynamic_points)
+            .is_err());
+        let one_more = rand_points(dynamic_points.len() + 1, &mut rng);
+        assert!(precomputation
+            .mixed_multi_scalar_mul(&static_scalars, &dynamic_scalars, &one_more)
+            .is_err());
+    }
+}
+
+#[test]
+fn test_hash_to_point() {
+    // Test vectors from @noble/curves using the ristretto255_XMD:SHA-512_R255MAP_RO_ suite
+    let test_vectors: &[(&[u8], &str)] = &[
+        (b"", "d2ef0e42a21c1b4221350ac82ad8669a18a0994df551ac07597a704a23d36436"),
+        (b"abc", "76a44d9dbe1079e8ca0637f69161de4b76e66d9604fc759c48e13bc5b30adc44"),
+        (b"abcdef0123456789", "086575a167ff6b9c0bbb90ef9a6c7498838188051f7f1f44db0d492b25b9db02"),
+        (b"q128_qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq", "446e5de27a26ea681258dfb38af2ca7ce64aa832768375386372da7a1f92cd24"),
+        (b"a512_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bae7b0ae7e4e19d166ba57965ae3968d09a92c029befe7f96626dbdcdbadce18"),
+    ];
+
+    for (msg, expected_hex) in test_vectors {
+        let expected = Hex::decode(expected_hex).unwrap();
+        let actual = RistrettoPoint::hash_to_ristretto255(msg);
+        assert_eq!(
+            expected,
+            actual.to_byte_array(),
+            "Failed for msg: {:?}",
+            std::str::from_utf8(msg).unwrap_or("<invalid utf8>")
+        );
+    }
 }

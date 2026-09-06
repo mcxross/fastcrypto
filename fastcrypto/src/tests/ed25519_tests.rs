@@ -261,6 +261,37 @@ fn verify_invalid_aggregate_signature_length_mismatch() {
 }
 
 #[test]
+fn verify_empty_aggregate_signature_is_rejected() {
+    // An empty Ed25519 aggregate signature must NOT verify trivially against any message; previously
+    // `verify(empty_agg, &[], msg)` returned `Ok(())` because the batch verifier accepts an empty
+    // batch as valid.
+    let empty_agg: Ed25519AggregateSignature =
+        Ed25519AggregateSignature::aggregate(std::iter::empty::<&Ed25519Signature>()).unwrap();
+    assert!(empty_agg.verify(&[], b"attacker-chosen message").is_err());
+    assert!(empty_agg
+        .verify_different_msg(&[], &[b"attacker-chosen message"])
+        .is_err());
+
+    // batch_verify on an empty outer slice, or a batch that contains an empty aggregate, must
+    // also be rejected.
+    assert!(Ed25519AggregateSignature::batch_verify(
+        &[],
+        Vec::<std::slice::Iter<'_, Ed25519PublicKey>>::new(),
+        &[]
+    )
+    .is_err());
+    let (digest, pubkeys, signatures) = signature_test_inputs();
+    let real_agg = Ed25519AggregateSignature::aggregate(&signatures).unwrap();
+    let pk_lists = vec![pubkeys.iter(), [].iter()];
+    assert!(Ed25519AggregateSignature::batch_verify(
+        &[&real_agg, &empty_agg],
+        pk_lists,
+        &[&digest[..], b"anything"]
+    )
+    .is_err());
+}
+
+#[test]
 fn verify_invalid_aggregate_signature_public_key_switch() {
     let (digest, mut pubkeys, signatures) = signature_test_inputs();
     let aggregated_signature = Ed25519AggregateSignature::aggregate(&signatures).unwrap();
@@ -427,6 +458,13 @@ fn test_to_from_bytes_aggregate_signatures() {
     let serialized = sig.as_bytes();
     let deserialized = Ed25519AggregateSignature::from_bytes(serialized).unwrap();
     assert_eq!(deserialized, sig);
+
+    // Inputs whose length is not a multiple of the signature length must be rejected instead of
+    // silently dropping the trailing bytes.
+    let mut with_trailing_byte = serialized.to_vec();
+    with_trailing_byte.push(0);
+    assert!(Ed25519AggregateSignature::from_bytes(&with_trailing_byte).is_err());
+    assert!(Ed25519AggregateSignature::from_bytes(&[0u8; 1]).is_err());
 }
 
 #[test]
@@ -570,7 +608,8 @@ fn test_default_values() {
     let default_sig = Ed25519Signature::default();
     let valid_pk = valid_kp.public().clone();
     let default_pk = Ed25519PublicKey::insecure_default();
-    let valid_agg_sig = Ed25519AggregateSignature::aggregate(&[valid_sig.clone()]).unwrap();
+    let valid_agg_sig =
+        Ed25519AggregateSignature::aggregate(std::slice::from_ref(&valid_sig)).unwrap();
     let default_agg_sig = Ed25519AggregateSignature::default();
 
     // Default sig should fail (for both types of keys)
@@ -582,10 +621,10 @@ fn test_default_values() {
 
     // Verifications with one of the default values should fail.
     assert!(valid_agg_sig
-        .verify(&[valid_pk.clone()], b"message")
+        .verify(std::slice::from_ref(&valid_pk), b"message")
         .is_ok());
     assert!(valid_agg_sig
-        .verify(&[default_pk.clone()], b"message")
+        .verify(std::slice::from_ref(&default_pk), b"message")
         .is_err());
     assert!(default_agg_sig.verify(&[valid_pk], b"message").is_err());
     assert!(default_agg_sig.verify(&[default_pk], b"message").is_err());
