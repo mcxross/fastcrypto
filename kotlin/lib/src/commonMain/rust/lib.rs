@@ -492,7 +492,7 @@ pub fn secp256k1_verify(
     Ok(pk.verify(&message, &sig).is_ok())
 }
 
-/// Aptos keys Secp256k1 accounts by the 65-byte uncompressed key.
+/// The 65-byte uncompressed public key; [`secp256k1_public_key_from_private`] returns 33 bytes.
 #[uniffi::export]
 pub fn secp256k1_public_key_uncompressed(
     private_key: Vec<u8>,
@@ -504,7 +504,7 @@ pub fn secp256k1_public_key_uncompressed(
     Ok(kp.public().pubkey.serialize_uncompressed().to_vec())
 }
 
-/// Aptos signs Secp256k1 over SHA3-256; [`secp256k1_sign`] keeps SHA-256.
+/// Signs the SHA3-256 of `message`; [`secp256k1_sign`] uses SHA-256.
 #[uniffi::export]
 pub fn secp256k1_sign_sha3_256(
     private_key: Vec<u8>,
@@ -784,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn secp256k1_sha3_256_matches_aptos() {
+    fn secp256k1_sha3_256_matches_known_vector() {
         let private_key = vec![0x11; 32];
         let message = b"flare".to_vec();
         let public_key = secp256k1_public_key_uncompressed(private_key.clone()).unwrap();
