@@ -39,6 +39,10 @@ abstract class BuildJvmNativeLibsTask : DefaultTask() {
         val wrapperDir = workingDir.get().asFile.resolve(".cargo")
         val zigAarch64 = wrapperDir.resolve("zig-cc-aarch64-linux-gnu").absolutePath
         val zigX86 = wrapperDir.resolve("zig-cc-x86_64-linux-gnu").absolutePath
+        // The macOS ar/ranlib index only Mach-O objects, so C archives built for Linux (blst's) came
+        // out with an empty symbol table and their code never linked. Zig's tools understand ELF.
+        val zigAr = wrapperDir.resolve("zig-ar").absolutePath
+        val zigRanlib = wrapperDir.resolve("zig-ranlib").absolutePath
         val pathSeparator = File.pathSeparator
         val existingPath = System.getenv("PATH") ?: ""
         targets.get().forEach { target ->
@@ -56,6 +60,11 @@ abstract class BuildJvmNativeLibsTask : DefaultTask() {
                 environment("CXX_aarch64-unknown-linux-gnu", zigAarch64)
                 environment("CC_x86_64-unknown-linux-gnu", zigX86)
                 environment("CXX_x86_64-unknown-linux-gnu", zigX86)
+                for (linuxTarget in listOf("aarch64_unknown_linux_gnu", "x86_64_unknown_linux_gnu",
+                                           "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu")) {
+                    environment("AR_$linuxTarget", zigAr)
+                    environment("RANLIB_$linuxTarget", zigRanlib)
+                }
                 environment("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", zigAarch64)
                 environment("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER", zigX86)
             }

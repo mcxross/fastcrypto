@@ -214,6 +214,13 @@ tasks.withType<CargoTask>().configureEach {
   additionalEnvironment.put("CXX_aarch64-unknown-linux-gnu", zigAarch64WrapperName)
   additionalEnvironment.put("CC_x86_64-unknown-linux-gnu", zigX86WrapperName)
   additionalEnvironment.put("CXX_x86_64-unknown-linux-gnu", zigX86WrapperName)
+  // Archive Linux C objects with Zig too: the macOS ar/ranlib can't index ELF objects, which left
+  // blst's archive empty and its symbols undefined in the Linux libraries.
+  for (target in listOf("aarch64_unknown_linux_gnu", "x86_64_unknown_linux_gnu",
+                        "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu")) {
+    additionalEnvironment.put("AR_$target", "zig-ar")
+    additionalEnvironment.put("RANLIB_$target", "zig-ranlib")
+  }
 }
 
 cargo {

@@ -93,16 +93,24 @@ jobs:
           exec zig cc -target x86_64-linux-gnu "${args[@]}"
           SH
 
-          chmod +x "${WRAPPER_DIR}/zig-cc-"*
+          # macOS ar/ranlib can't index ELF objects; archive Linux C dependencies (blst) with Zig.
+          printf '#!/usr/bin/env bash\nexec zig ar "$@"\n' > "${WRAPPER_DIR}/zig-ar"
+          printf '#!/usr/bin/env bash\nexec zig ranlib "$@"\n' > "${WRAPPER_DIR}/zig-ranlib"
+
+          chmod +x "${WRAPPER_DIR}/zig-cc-"* "${WRAPPER_DIR}/zig-ar" "${WRAPPER_DIR}/zig-ranlib"
 
           {
             echo "CC_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
             echo "CXX_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
+            echo "AR_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-ar"
+            echo "RANLIB_aarch64_unknown_linux_gnu=${WRAPPER_DIR}/zig-ranlib"
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=${WRAPPER_DIR}/zig-cc-aarch64-linux-gnu"
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=aarch64-linux-gnu"
 
             echo "CC_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
             echo "CXX_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
+            echo "AR_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-ar"
+            echo "RANLIB_x86_64_unknown_linux_gnu=${WRAPPER_DIR}/zig-ranlib"
             echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${WRAPPER_DIR}/zig-cc-x86_64-linux-gnu"
             echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-target -C link-arg=x86_64-linux-gnu"
           } >> "$GITHUB_ENV"

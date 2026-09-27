@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The host's ar and ranlib on macOS index only Mach-O objects, which leaves Linux archives such as
+# libblst.a with an empty symbol table, so their code silently never links. Zig's understands ELF.
+exec zig ar "$@"
