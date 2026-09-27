@@ -492,6 +492,46 @@ pub fn secp256k1_verify(
     Ok(pk.verify(&message, &sig).is_ok())
 }
 
+/// Aptos keys Secp256k1 accounts by the 65-byte uncompressed key.
+#[uniffi::export]
+pub fn secp256k1_public_key_uncompressed(
+    private_key: Vec<u8>,
+) -> Result<Vec<u8>, FastCryptoFfiError> {
+    ensure_len(private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH)?;
+    let mut private_key = private_key;
+    let kp = Secp256k1KeyPair::from_bytes(&private_key)?;
+    private_key.zeroize();
+    Ok(kp.public().pubkey.serialize_uncompressed().to_vec())
+}
+
+/// Aptos signs Secp256k1 over SHA3-256; [`secp256k1_sign`] keeps SHA-256.
+#[uniffi::export]
+pub fn secp256k1_sign_sha3_256(
+    private_key: Vec<u8>,
+    message: Vec<u8>,
+) -> Result<Vec<u8>, FastCryptoFfiError> {
+    ensure_len(private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH)?;
+    let mut private_key = private_key;
+    let kp = Secp256k1KeyPair::from_bytes(&private_key)?;
+    let sig = kp.sign_with_hash::<Sha3_256>(&message);
+    private_key.zeroize();
+    Ok(sig.as_ref().to_vec())
+}
+
+/// Takes a compressed or uncompressed key; high-S signatures are rejected.
+#[uniffi::export]
+pub fn secp256k1_verify_sha3_256(
+    public_key: Vec<u8>,
+    message: Vec<u8>,
+    signature: Vec<u8>,
+) -> Result<bool, FastCryptoFfiError> {
+    ensure_len(signature.len(), SECP256K1_SIGNATURE_LENGTH)?;
+    let point = K256PublicKey::from_sec1_bytes(&public_key).map_err(|_| FastCryptoFfiError::InvalidInput)?;
+    let pk = Secp256k1PublicKey::from_bytes(point.to_encoded_point(true).as_bytes())?;
+    let sig = Secp256k1Signature::from_bytes(&signature)?;
+    Ok(pk.verify_with_hash::<Sha3_256>(&message, &sig).is_ok())
+}
+
 #[uniffi::export]
 pub fn secp256k1_sign_recoverable(
     private_key: Vec<u8>,
@@ -741,6 +781,20 @@ mod tests {
         assert_eq!(signature.len(), ED25519_SIGNATURE_LENGTH);
         let verified = ed25519_verify(kp.public_key.clone(), message, signature).unwrap();
         assert!(verified);
+    }
+
+    #[test]
+    fn secp256k1_sha3_256_matches_aptos() {
+        let private_key = vec![0x11; 32];
+        let message = b"flare".to_vec();
+        let public_key = secp256k1_public_key_uncompressed(private_key.clone()).unwrap();
+        assert_eq!(hex::encode(&public_key), "044f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa385b6b1b8ead809ca67454d9683fcf2ba03456d6fe2c4abe2b07f0fbdbb2f1c1");
+        let signature = secp256k1_sign_sha3_256(private_key.clone(), message.clone()).unwrap();
+        assert_eq!(hex::encode(&signature), "5fd8d67ff016b9980faaa40885b7db827aa6ad123437ba0f96cc825f9187af532da425f48045a7dfb612cc8a8cf7e96a9701d176a680614730e6deb9464040fa");
+        assert!(secp256k1_verify_sha3_256(public_key.clone(), message.clone(), signature.clone()).unwrap());
+        let compressed = secp256k1_public_key_from_private(private_key).unwrap();
+        assert!(secp256k1_verify_sha3_256(compressed, message.clone(), signature.clone()).unwrap());
+        assert!(!secp256k1_verify_sha3_256(public_key, b"other".to_vec(), signature).unwrap());
     }
 
     #[test]
