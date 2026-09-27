@@ -492,516 +492,570 @@
 <a href=#492 id=492 data-nosnippet>492</a>    <span class="prelude-val">Ok</span>(pk.verify(<span class="kw-2">&amp;</span>message, <span class="kw-2">&amp;</span>sig).is_ok())
 <a href=#493 id=493 data-nosnippet>493</a>}
 <a href=#494 id=494 data-nosnippet>494</a>
-<a href=#495 id=495 data-nosnippet>495</a><span class="attr">#[uniffi::export]
-<a href=#496 id=496 data-nosnippet>496</a></span><span class="kw">pub fn </span>secp256k1_sign_recoverable(
-<a href=#497 id=497 data-nosnippet>497</a>    private_key: Vec&lt;u8&gt;,
-<a href=#498 id=498 data-nosnippet>498</a>    message: Vec&lt;u8&gt;,
+<a href=#495 id=495 data-nosnippet>495</a><span class="doccomment">/// Aptos keys Secp256k1 accounts by the 65-byte uncompressed key.
+<a href=#496 id=496 data-nosnippet>496</a></span><span class="attr">#[uniffi::export]
+<a href=#497 id=497 data-nosnippet>497</a></span><span class="kw">pub fn </span>secp256k1_public_key_uncompressed(
+<a href=#498 id=498 data-nosnippet>498</a>    private_key: Vec&lt;u8&gt;,
 <a href=#499 id=499 data-nosnippet>499</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
 <a href=#500 id=500 data-nosnippet>500</a>    ensure_len(private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
 <a href=#501 id=501 data-nosnippet>501</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
 <a href=#502 id=502 data-nosnippet>502</a>    <span class="kw">let </span>kp = Secp256k1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
-<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">let </span>sig = kp.sign_recoverable(<span class="kw-2">&amp;</span>message);
-<a href=#504 id=504 data-nosnippet>504</a>    private_key.zeroize();
-<a href=#505 id=505 data-nosnippet>505</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
-<a href=#506 id=506 data-nosnippet>506</a>}
-<a href=#507 id=507 data-nosnippet>507</a>
-<a href=#508 id=508 data-nosnippet>508</a><span class="attr">#[uniffi::export]
-<a href=#509 id=509 data-nosnippet>509</a></span><span class="kw">pub fn </span>secp256k1_recover_public_key(
-<a href=#510 id=510 data-nosnippet>510</a>    message: Vec&lt;u8&gt;,
-<a href=#511 id=511 data-nosnippet>511</a>    signature: Vec&lt;u8&gt;,
+<a href=#503 id=503 data-nosnippet>503</a>    private_key.zeroize();
+<a href=#504 id=504 data-nosnippet>504</a>    <span class="prelude-val">Ok</span>(kp.public().pubkey.serialize_uncompressed().to_vec())
+<a href=#505 id=505 data-nosnippet>505</a>}
+<a href=#506 id=506 data-nosnippet>506</a>
+<a href=#507 id=507 data-nosnippet>507</a><span class="doccomment">/// Aptos signs Secp256k1 over SHA3-256; [`secp256k1_sign`] keeps SHA-256.
+<a href=#508 id=508 data-nosnippet>508</a></span><span class="attr">#[uniffi::export]
+<a href=#509 id=509 data-nosnippet>509</a></span><span class="kw">pub fn </span>secp256k1_sign_sha3_256(
+<a href=#510 id=510 data-nosnippet>510</a>    private_key: Vec&lt;u8&gt;,
+<a href=#511 id=511 data-nosnippet>511</a>    message: Vec&lt;u8&gt;,
 <a href=#512 id=512 data-nosnippet>512</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#513 id=513 data-nosnippet>513</a>    ensure_len(signature.len(), SECP256K1_RECOVERABLE_SIGNATURE_SIZE)<span class="question-mark">?</span>;
-<a href=#514 id=514 data-nosnippet>514</a>    <span class="kw">let </span>sig = Secp256k1RecoverableSignature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
-<a href=#515 id=515 data-nosnippet>515</a>    <span class="kw">let </span>pk = sig.recover(<span class="kw-2">&amp;</span>message)<span class="question-mark">?</span>;
-<a href=#516 id=516 data-nosnippet>516</a>    <span class="prelude-val">Ok</span>(pk.as_ref().to_vec())
-<a href=#517 id=517 data-nosnippet>517</a>}
-<a href=#518 id=518 data-nosnippet>518</a>
-<a href=#519 id=519 data-nosnippet>519</a><span class="attr">#[uniffi::export]
-<a href=#520 id=520 data-nosnippet>520</a></span><span class="kw">pub fn </span>secp256r1_generate_keypair() -&gt; KeyPairBytes {
-<a href=#521 id=521 data-nosnippet>521</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::generate(<span class="kw-2">&amp;mut </span>thread_rng());
-<a href=#522 id=522 data-nosnippet>522</a>    KeyPairBytes {
-<a href=#523 id=523 data-nosnippet>523</a>        public_key: kp.public().as_ref().to_vec(),
-<a href=#524 id=524 data-nosnippet>524</a>        private_key: kp.as_ref().to_vec(),
-<a href=#525 id=525 data-nosnippet>525</a>    }
-<a href=#526 id=526 data-nosnippet>526</a>}
-<a href=#527 id=527 data-nosnippet>527</a>
-<a href=#528 id=528 data-nosnippet>528</a><span class="attr">#[uniffi::export]
-<a href=#529 id=529 data-nosnippet>529</a></span><span class="kw">pub fn </span>secp256r1_public_key_from_private(
-<a href=#530 id=530 data-nosnippet>530</a>    private_key: Vec&lt;u8&gt;,
-<a href=#531 id=531 data-nosnippet>531</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#532 id=532 data-nosnippet>532</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
-<a href=#533 id=533 data-nosnippet>533</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
-<a href=#534 id=534 data-nosnippet>534</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
-<a href=#535 id=535 data-nosnippet>535</a>    private_key.zeroize();
-<a href=#536 id=536 data-nosnippet>536</a>    <span class="prelude-val">Ok</span>(kp.public().as_ref().to_vec())
-<a href=#537 id=537 data-nosnippet>537</a>}
-<a href=#538 id=538 data-nosnippet>538</a>
-<a href=#539 id=539 data-nosnippet>539</a><span class="doccomment">/// Validates and converts a compressed or uncompressed SEC1 P-256 public key.
-<a href=#540 id=540 data-nosnippet>540</a></span><span class="attr">#[uniffi::export]
-<a href=#541 id=541 data-nosnippet>541</a></span><span class="kw">pub fn </span>secp256r1_normalize_public_key(
-<a href=#542 id=542 data-nosnippet>542</a>    public_key: Vec&lt;u8&gt;,
-<a href=#543 id=543 data-nosnippet>543</a>    compressed: bool,
-<a href=#544 id=544 data-nosnippet>544</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#545 id=545 data-nosnippet>545</a>    normalize_secp256r1_public_key(<span class="kw-2">&amp;</span>public_key, compressed)
+<a href=#513 id=513 data-nosnippet>513</a>    ensure_len(private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
+<a href=#514 id=514 data-nosnippet>514</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
+<a href=#515 id=515 data-nosnippet>515</a>    <span class="kw">let </span>kp = Secp256k1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
+<a href=#516 id=516 data-nosnippet>516</a>    <span class="kw">let </span>sig = kp.sign_with_hash::&lt;Sha3_256&gt;(<span class="kw-2">&amp;</span>message);
+<a href=#517 id=517 data-nosnippet>517</a>    private_key.zeroize();
+<a href=#518 id=518 data-nosnippet>518</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
+<a href=#519 id=519 data-nosnippet>519</a>}
+<a href=#520 id=520 data-nosnippet>520</a>
+<a href=#521 id=521 data-nosnippet>521</a><span class="doccomment">/// Takes a compressed or uncompressed key; high-S signatures are rejected.
+<a href=#522 id=522 data-nosnippet>522</a></span><span class="attr">#[uniffi::export]
+<a href=#523 id=523 data-nosnippet>523</a></span><span class="kw">pub fn </span>secp256k1_verify_sha3_256(
+<a href=#524 id=524 data-nosnippet>524</a>    public_key: Vec&lt;u8&gt;,
+<a href=#525 id=525 data-nosnippet>525</a>    message: Vec&lt;u8&gt;,
+<a href=#526 id=526 data-nosnippet>526</a>    signature: Vec&lt;u8&gt;,
+<a href=#527 id=527 data-nosnippet>527</a>) -&gt; <span class="prelude-ty">Result</span>&lt;bool, FastCryptoFfiError&gt; {
+<a href=#528 id=528 data-nosnippet>528</a>    ensure_len(signature.len(), SECP256K1_SIGNATURE_LENGTH)<span class="question-mark">?</span>;
+<a href=#529 id=529 data-nosnippet>529</a>    <span class="kw">let </span>point = K256PublicKey::from_sec1_bytes(<span class="kw-2">&amp;</span>public_key).map_err(|<span class="kw">_</span>| FastCryptoFfiError::InvalidInput)<span class="question-mark">?</span>;
+<a href=#530 id=530 data-nosnippet>530</a>    <span class="kw">let </span>pk = Secp256k1PublicKey::from_bytes(point.to_encoded_point(<span class="bool-val">true</span>).as_bytes())<span class="question-mark">?</span>;
+<a href=#531 id=531 data-nosnippet>531</a>    <span class="kw">let </span>sig = Secp256k1Signature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
+<a href=#532 id=532 data-nosnippet>532</a>    <span class="prelude-val">Ok</span>(pk.verify_with_hash::&lt;Sha3_256&gt;(<span class="kw-2">&amp;</span>message, <span class="kw-2">&amp;</span>sig).is_ok())
+<a href=#533 id=533 data-nosnippet>533</a>}
+<a href=#534 id=534 data-nosnippet>534</a>
+<a href=#535 id=535 data-nosnippet>535</a><span class="attr">#[uniffi::export]
+<a href=#536 id=536 data-nosnippet>536</a></span><span class="kw">pub fn </span>secp256k1_sign_recoverable(
+<a href=#537 id=537 data-nosnippet>537</a>    private_key: Vec&lt;u8&gt;,
+<a href=#538 id=538 data-nosnippet>538</a>    message: Vec&lt;u8&gt;,
+<a href=#539 id=539 data-nosnippet>539</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#540 id=540 data-nosnippet>540</a>    ensure_len(private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
+<a href=#541 id=541 data-nosnippet>541</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
+<a href=#542 id=542 data-nosnippet>542</a>    <span class="kw">let </span>kp = Secp256k1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
+<a href=#543 id=543 data-nosnippet>543</a>    <span class="kw">let </span>sig = kp.sign_recoverable(<span class="kw-2">&amp;</span>message);
+<a href=#544 id=544 data-nosnippet>544</a>    private_key.zeroize();
+<a href=#545 id=545 data-nosnippet>545</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
 <a href=#546 id=546 data-nosnippet>546</a>}
 <a href=#547 id=547 data-nosnippet>547</a>
 <a href=#548 id=548 data-nosnippet>548</a><span class="attr">#[uniffi::export]
-<a href=#549 id=549 data-nosnippet>549</a></span><span class="kw">pub fn </span>secp256r1_sign(
-<a href=#550 id=550 data-nosnippet>550</a>    private_key: Vec&lt;u8&gt;,
-<a href=#551 id=551 data-nosnippet>551</a>    message: Vec&lt;u8&gt;,
+<a href=#549 id=549 data-nosnippet>549</a></span><span class="kw">pub fn </span>secp256k1_recover_public_key(
+<a href=#550 id=550 data-nosnippet>550</a>    message: Vec&lt;u8&gt;,
+<a href=#551 id=551 data-nosnippet>551</a>    signature: Vec&lt;u8&gt;,
 <a href=#552 id=552 data-nosnippet>552</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#553 id=553 data-nosnippet>553</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
-<a href=#554 id=554 data-nosnippet>554</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
-<a href=#555 id=555 data-nosnippet>555</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
-<a href=#556 id=556 data-nosnippet>556</a>    <span class="kw">let </span>sig = kp.sign(<span class="kw-2">&amp;</span>message);
-<a href=#557 id=557 data-nosnippet>557</a>    private_key.zeroize();
-<a href=#558 id=558 data-nosnippet>558</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
-<a href=#559 id=559 data-nosnippet>559</a>}
-<a href=#560 id=560 data-nosnippet>560</a>
-<a href=#561 id=561 data-nosnippet>561</a><span class="doccomment">/// Aptos' P-256 convention hashes transaction and message bytes with SHA3-256.
-<a href=#562 id=562 data-nosnippet>562</a>///
-<a href=#563 id=563 data-nosnippet>563</a>/// This operation is deliberately separate from [`secp256r1_sign`], whose SHA-256 behavior is
-<a href=#564 id=564 data-nosnippet>564</a>/// retained for standards such as WebAuthn.
-<a href=#565 id=565 data-nosnippet>565</a></span><span class="attr">#[uniffi::export]
-<a href=#566 id=566 data-nosnippet>566</a></span><span class="kw">pub fn </span>secp256r1_sign_sha3_256(
-<a href=#567 id=567 data-nosnippet>567</a>    private_key: Vec&lt;u8&gt;,
-<a href=#568 id=568 data-nosnippet>568</a>    message: Vec&lt;u8&gt;,
-<a href=#569 id=569 data-nosnippet>569</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#570 id=570 data-nosnippet>570</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
-<a href=#571 id=571 data-nosnippet>571</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
-<a href=#572 id=572 data-nosnippet>572</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
-<a href=#573 id=573 data-nosnippet>573</a>    <span class="kw">let </span>sig = kp.sign_with_hash::&lt;Sha3_256&gt;(<span class="kw-2">&amp;</span>message);
-<a href=#574 id=574 data-nosnippet>574</a>    private_key.zeroize();
-<a href=#575 id=575 data-nosnippet>575</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
-<a href=#576 id=576 data-nosnippet>576</a>}
-<a href=#577 id=577 data-nosnippet>577</a>
-<a href=#578 id=578 data-nosnippet>578</a><span class="attr">#[uniffi::export]
-<a href=#579 id=579 data-nosnippet>579</a></span><span class="kw">pub fn </span>mnemonic_generate(word_count: u32) -&gt; <span class="prelude-ty">Result</span>&lt;String, FastCryptoFfiError&gt; {
-<a href=#580 id=580 data-nosnippet>580</a>    <span class="kw">let </span>count = ensure_mnemonic_word_count(word_count <span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#581 id=581 data-nosnippet>581</a>    <span class="kw">let </span>mnemonic = Mnemonic::generate_in(Language::English, count)
-<a href=#582 id=582 data-nosnippet>582</a>        .map_err(|<span class="kw">_</span>| FastCryptoFfiError::InvalidInput)<span class="question-mark">?</span>;
-<a href=#583 id=583 data-nosnippet>583</a>    <span class="prelude-val">Ok</span>(mnemonic.to_string())
-<a href=#584 id=584 data-nosnippet>584</a>}
-<a href=#585 id=585 data-nosnippet>585</a>
-<a href=#586 id=586 data-nosnippet>586</a><span class="attr">#[uniffi::export]
-<a href=#587 id=587 data-nosnippet>587</a></span><span class="kw">pub fn </span>mnemonic_validate(phrase: String) -&gt; bool {
-<a href=#588 id=588 data-nosnippet>588</a>    Mnemonic::parse_in_normalized(Language::English, <span class="kw-2">&amp;</span>phrase).is_ok()
-<a href=#589 id=589 data-nosnippet>589</a>}
-<a href=#590 id=590 data-nosnippet>590</a>
-<a href=#591 id=591 data-nosnippet>591</a><span class="attr">#[uniffi::export]
-<a href=#592 id=592 data-nosnippet>592</a></span><span class="kw">pub fn </span>mnemonic_to_seed(phrase: String, passphrase: String) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#593 id=593 data-nosnippet>593</a>    <span class="kw">let </span>mnemonic = parse_mnemonic(<span class="kw-2">&amp;</span>phrase)<span class="question-mark">?</span>;
-<a href=#594 id=594 data-nosnippet>594</a>    <span class="kw">let </span>seed = mnemonic.to_seed(passphrase);
-<a href=#595 id=595 data-nosnippet>595</a>    <span class="prelude-val">Ok</span>(seed.to_vec())
-<a href=#596 id=596 data-nosnippet>596</a>}
-<a href=#597 id=597 data-nosnippet>597</a>
-<a href=#598 id=598 data-nosnippet>598</a><span class="attr">#[uniffi::export]
-<a href=#599 id=599 data-nosnippet>599</a></span><span class="kw">pub fn </span>mnemonic_derive_private_key(
-<a href=#600 id=600 data-nosnippet>600</a>    phrase: String,
-<a href=#601 id=601 data-nosnippet>601</a>    passphrase: String,
-<a href=#602 id=602 data-nosnippet>602</a>    scheme: SignatureScheme,
-<a href=#603 id=603 data-nosnippet>603</a>    path: String,
-<a href=#604 id=604 data-nosnippet>604</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#605 id=605 data-nosnippet>605</a>    <span class="kw">let </span>mnemonic = parse_mnemonic(<span class="kw-2">&amp;</span>phrase)<span class="question-mark">?</span>;
-<a href=#606 id=606 data-nosnippet>606</a>    <span class="kw">let </span>seed = mnemonic.to_seed(passphrase);
-<a href=#607 id=607 data-nosnippet>607</a>    <span class="kw">match </span>scheme {
-<a href=#608 id=608 data-nosnippet>608</a>        SignatureScheme::Ed25519 =&gt; ed25519_derive_private_key(seed.as_ref(), <span class="kw-2">&amp;</span>path),
-<a href=#609 id=609 data-nosnippet>609</a>        SignatureScheme::Secp256k1 | SignatureScheme::Secp256r1 =&gt; {
-<a href=#610 id=610 data-nosnippet>610</a>            bip32_derive_private_key(seed.as_ref(), <span class="kw-2">&amp;</span>path)
-<a href=#611 id=611 data-nosnippet>611</a>        }
-<a href=#612 id=612 data-nosnippet>612</a>    }
-<a href=#613 id=613 data-nosnippet>613</a>}
-<a href=#614 id=614 data-nosnippet>614</a>
-<a href=#615 id=615 data-nosnippet>615</a><span class="attr">#[uniffi::export]
-<a href=#616 id=616 data-nosnippet>616</a></span><span class="kw">pub fn </span>mnemonic_derive_public_key(
-<a href=#617 id=617 data-nosnippet>617</a>    phrase: String,
-<a href=#618 id=618 data-nosnippet>618</a>    passphrase: String,
-<a href=#619 id=619 data-nosnippet>619</a>    scheme: SignatureScheme,
-<a href=#620 id=620 data-nosnippet>620</a>    path: String,
-<a href=#621 id=621 data-nosnippet>621</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#622 id=622 data-nosnippet>622</a>    <span class="kw">let </span>private_key = mnemonic_derive_private_key(phrase, passphrase, scheme, path)<span class="question-mark">?</span>;
-<a href=#623 id=623 data-nosnippet>623</a>    <span class="kw">match </span>scheme {
-<a href=#624 id=624 data-nosnippet>624</a>        SignatureScheme::Ed25519 =&gt; ed25519_public_key_from_private(private_key),
-<a href=#625 id=625 data-nosnippet>625</a>        SignatureScheme::Secp256k1 =&gt; secp256k1_public_key_from_private(private_key),
-<a href=#626 id=626 data-nosnippet>626</a>        SignatureScheme::Secp256r1 =&gt; secp256r1_public_key_from_private(private_key),
-<a href=#627 id=627 data-nosnippet>627</a>    }
-<a href=#628 id=628 data-nosnippet>628</a>}
-<a href=#629 id=629 data-nosnippet>629</a>
-<a href=#630 id=630 data-nosnippet>630</a><span class="attr">#[uniffi::export]
-<a href=#631 id=631 data-nosnippet>631</a></span><span class="kw">pub fn </span>mnemonic_derive_keypair(
-<a href=#632 id=632 data-nosnippet>632</a>    phrase: String,
-<a href=#633 id=633 data-nosnippet>633</a>    passphrase: String,
-<a href=#634 id=634 data-nosnippet>634</a>    scheme: SignatureScheme,
-<a href=#635 id=635 data-nosnippet>635</a>    path: String,
-<a href=#636 id=636 data-nosnippet>636</a>) -&gt; <span class="prelude-ty">Result</span>&lt;KeyPairBytes, FastCryptoFfiError&gt; {
-<a href=#637 id=637 data-nosnippet>637</a>    <span class="kw">let </span>private_key = mnemonic_derive_private_key(phrase, passphrase, scheme, path)<span class="question-mark">?</span>;
-<a href=#638 id=638 data-nosnippet>638</a>    <span class="kw">let </span>public_key = <span class="kw">match </span>scheme {
-<a href=#639 id=639 data-nosnippet>639</a>        SignatureScheme::Ed25519 =&gt; ed25519_public_key_from_private(private_key.clone())<span class="question-mark">?</span>,
-<a href=#640 id=640 data-nosnippet>640</a>        SignatureScheme::Secp256k1 =&gt; secp256k1_public_key_from_private(private_key.clone())<span class="question-mark">?</span>,
-<a href=#641 id=641 data-nosnippet>641</a>        SignatureScheme::Secp256r1 =&gt; secp256r1_public_key_from_private(private_key.clone())<span class="question-mark">?</span>,
-<a href=#642 id=642 data-nosnippet>642</a>    };
-<a href=#643 id=643 data-nosnippet>643</a>    <span class="prelude-val">Ok</span>(KeyPairBytes {
-<a href=#644 id=644 data-nosnippet>644</a>        public_key,
-<a href=#645 id=645 data-nosnippet>645</a>        private_key,
-<a href=#646 id=646 data-nosnippet>646</a>    })
-<a href=#647 id=647 data-nosnippet>647</a>}
-<a href=#648 id=648 data-nosnippet>648</a>
-<a href=#649 id=649 data-nosnippet>649</a><span class="attr">#[cfg(test)]
-<a href=#650 id=650 data-nosnippet>650</a></span><span class="kw">mod </span>tests {
-<a href=#651 id=651 data-nosnippet>651</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">use </span>ark_bn254::{Bn254, Fr};
-<a href=#653 id=653 data-nosnippet>653</a>    <span class="kw">use </span>ark_ff::UniformRand;
-<a href=#654 id=654 data-nosnippet>654</a>    <span class="kw">use </span>ark_groth16::Groth16;
-<a href=#655 id=655 data-nosnippet>655</a>    <span class="kw">use </span>ark_serialize::CanonicalSerialize;
-<a href=#656 id=656 data-nosnippet>656</a>    <span class="kw">use </span>ark_snark::SNARK;
-<a href=#657 id=657 data-nosnippet>657</a>    <span class="kw">use </span>ark_std::rand::thread_rng;
-<a href=#658 id=658 data-nosnippet>658</a>    <span class="kw">use </span>fastcrypto::ed25519::{
-<a href=#659 id=659 data-nosnippet>659</a>        ED25519_PRIVATE_KEY_LENGTH, ED25519_PUBLIC_KEY_LENGTH, ED25519_SIGNATURE_LENGTH,
-<a href=#660 id=660 data-nosnippet>660</a>    };
-<a href=#661 id=661 data-nosnippet>661</a>    <span class="kw">use </span>fastcrypto::secp256k1::{
-<a href=#662 id=662 data-nosnippet>662</a>        SECP256K1_PRIVATE_KEY_LENGTH, SECP256K1_PUBLIC_KEY_LENGTH, SECP256K1_SIGNATURE_LENGTH,
-<a href=#663 id=663 data-nosnippet>663</a>    };
-<a href=#664 id=664 data-nosnippet>664</a>    <span class="kw">use </span>fastcrypto::secp256r1::{
-<a href=#665 id=665 data-nosnippet>665</a>        SECP256R1_PRIVATE_KEY_LENGTH, SECP256R1_PUBLIC_KEY_LENGTH, SECP256R1_SIGNATURE_LENTH,
-<a href=#666 id=666 data-nosnippet>666</a>    };
-<a href=#667 id=667 data-nosnippet>667</a>    <span class="kw">use </span>fastcrypto_zkp::dummy_circuits::DummyCircuit;
-<a href=#668 id=668 data-nosnippet>668</a>
-<a href=#669 id=669 data-nosnippet>669</a>    <span class="kw">const </span>TEST_MNEMONIC: <span class="kw-2">&amp;</span>str =
-<a href=#670 id=670 data-nosnippet>670</a>        <span class="string">"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"</span>;
-<a href=#671 id=671 data-nosnippet>671</a>
-<a href=#672 id=672 data-nosnippet>672</a>    <span class="attr">#[test]
-<a href=#673 id=673 data-nosnippet>673</a>    </span><span class="kw">fn </span>bn254_poseidon_matches_known_aptos_vectors() {
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="kw">let </span><span class="kw-2">mut </span>one = <span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">32</span>];
-<a href=#675 id=675 data-nosnippet>675</a>        one[<span class="number">0</span>] = <span class="number">1</span>;
-<a href=#676 id=676 data-nosnippet>676</a>        <span class="kw">let </span><span class="kw-2">mut </span>two = <span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">32</span>];
-<a href=#677 id=677 data-nosnippet>677</a>        two[<span class="number">0</span>] = <span class="number">2</span>;
-<a href=#678 id=678 data-nosnippet>678</a>
-<a href=#679 id=679 data-nosnippet>679</a>        <span class="macro">assert_eq!</span>(
-<a href=#680 id=680 data-nosnippet>680</a>            hex::encode(bn254_poseidon_hash(<span class="macro">vec!</span>[one.clone()]).unwrap()),
-<a href=#681 id=681 data-nosnippet>681</a>            <span class="string">"33018202c57d898b84338b16d1a4960e133c6a4d656cfec1bd62a9ea00611729"
-<a href=#682 id=682 data-nosnippet>682</a>        </span>);
-<a href=#683 id=683 data-nosnippet>683</a>        <span class="macro">assert_eq!</span>(
-<a href=#684 id=684 data-nosnippet>684</a>            hex::encode(bn254_poseidon_hash(<span class="macro">vec!</span>[one, two]).unwrap()),
-<a href=#685 id=685 data-nosnippet>685</a>            <span class="string">"9a1817447a60199e51453274f217362acfe962966b4cf63d4190d6e7f5c05c11"
-<a href=#686 id=686 data-nosnippet>686</a>        </span>);
-<a href=#687 id=687 data-nosnippet>687</a>        <span class="macro">assert!</span>(bn254_poseidon_hash(<span class="macro">vec!</span>[]).is_err());
-<a href=#688 id=688 data-nosnippet>688</a>        <span class="macro">assert!</span>(bn254_poseidon_hash(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">31</span>]]).is_err());
-<a href=#689 id=689 data-nosnippet>689</a>        <span class="macro">assert!</span>(bn254_poseidon_hash(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">0xff</span>; <span class="number">32</span>]]).is_err());
-<a href=#690 id=690 data-nosnippet>690</a>    }
-<a href=#691 id=691 data-nosnippet>691</a>
-<a href=#692 id=692 data-nosnippet>692</a>    <span class="attr">#[test]
-<a href=#693 id=693 data-nosnippet>693</a>    </span><span class="kw">fn </span>bn254_groth16_prepare_and_verify_roundtrip() {
-<a href=#694 id=694 data-nosnippet>694</a>        <span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>thread_rng();
-<a href=#695 id=695 data-nosnippet>695</a>        <span class="kw">let </span>circuit = DummyCircuit::&lt;Fr&gt; {
-<a href=#696 id=696 data-nosnippet>696</a>            a: <span class="prelude-val">Some</span>(Fr::rand(rng)),
-<a href=#697 id=697 data-nosnippet>697</a>            b: <span class="prelude-val">Some</span>(Fr::rand(rng)),
-<a href=#698 id=698 data-nosnippet>698</a>            num_variables: <span class="number">16</span>,
-<a href=#699 id=699 data-nosnippet>699</a>            num_constraints: <span class="number">4</span>,
-<a href=#700 id=700 data-nosnippet>700</a>        };
-<a href=#701 id=701 data-nosnippet>701</a>        <span class="kw">let </span>(proving_key, verifying_key) =
-<a href=#702 id=702 data-nosnippet>702</a>            Groth16::&lt;Bn254&gt;::circuit_specific_setup(circuit, rng).unwrap();
-<a href=#703 id=703 data-nosnippet>703</a>        <span class="kw">let </span>proof = Groth16::&lt;Bn254&gt;::prove(<span class="kw-2">&amp;</span>proving_key, circuit, rng).unwrap();
-<a href=#704 id=704 data-nosnippet>704</a>        <span class="kw">let </span>public_input = circuit.a.unwrap() * circuit.b.unwrap();
-<a href=#705 id=705 data-nosnippet>705</a>
-<a href=#706 id=706 data-nosnippet>706</a>        <span class="kw">let </span><span class="kw-2">mut </span>verifying_key_bytes = Vec::new();
-<a href=#707 id=707 data-nosnippet>707</a>        verifying_key
-<a href=#708 id=708 data-nosnippet>708</a>            .serialize_compressed(<span class="kw-2">&amp;mut </span>verifying_key_bytes)
-<a href=#709 id=709 data-nosnippet>709</a>            .unwrap();
-<a href=#710 id=710 data-nosnippet>710</a>        <span class="kw">let </span>prepared = bn254_prepare_groth16_verifying_key(verifying_key_bytes).unwrap();
+<a href=#553 id=553 data-nosnippet>553</a>    ensure_len(signature.len(), SECP256K1_RECOVERABLE_SIGNATURE_SIZE)<span class="question-mark">?</span>;
+<a href=#554 id=554 data-nosnippet>554</a>    <span class="kw">let </span>sig = Secp256k1RecoverableSignature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
+<a href=#555 id=555 data-nosnippet>555</a>    <span class="kw">let </span>pk = sig.recover(<span class="kw-2">&amp;</span>message)<span class="question-mark">?</span>;
+<a href=#556 id=556 data-nosnippet>556</a>    <span class="prelude-val">Ok</span>(pk.as_ref().to_vec())
+<a href=#557 id=557 data-nosnippet>557</a>}
+<a href=#558 id=558 data-nosnippet>558</a>
+<a href=#559 id=559 data-nosnippet>559</a><span class="attr">#[uniffi::export]
+<a href=#560 id=560 data-nosnippet>560</a></span><span class="kw">pub fn </span>secp256r1_generate_keypair() -&gt; KeyPairBytes {
+<a href=#561 id=561 data-nosnippet>561</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::generate(<span class="kw-2">&amp;mut </span>thread_rng());
+<a href=#562 id=562 data-nosnippet>562</a>    KeyPairBytes {
+<a href=#563 id=563 data-nosnippet>563</a>        public_key: kp.public().as_ref().to_vec(),
+<a href=#564 id=564 data-nosnippet>564</a>        private_key: kp.as_ref().to_vec(),
+<a href=#565 id=565 data-nosnippet>565</a>    }
+<a href=#566 id=566 data-nosnippet>566</a>}
+<a href=#567 id=567 data-nosnippet>567</a>
+<a href=#568 id=568 data-nosnippet>568</a><span class="attr">#[uniffi::export]
+<a href=#569 id=569 data-nosnippet>569</a></span><span class="kw">pub fn </span>secp256r1_public_key_from_private(
+<a href=#570 id=570 data-nosnippet>570</a>    private_key: Vec&lt;u8&gt;,
+<a href=#571 id=571 data-nosnippet>571</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#572 id=572 data-nosnippet>572</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
+<a href=#573 id=573 data-nosnippet>573</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
+<a href=#574 id=574 data-nosnippet>574</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
+<a href=#575 id=575 data-nosnippet>575</a>    private_key.zeroize();
+<a href=#576 id=576 data-nosnippet>576</a>    <span class="prelude-val">Ok</span>(kp.public().as_ref().to_vec())
+<a href=#577 id=577 data-nosnippet>577</a>}
+<a href=#578 id=578 data-nosnippet>578</a>
+<a href=#579 id=579 data-nosnippet>579</a><span class="doccomment">/// Validates and converts a compressed or uncompressed SEC1 P-256 public key.
+<a href=#580 id=580 data-nosnippet>580</a></span><span class="attr">#[uniffi::export]
+<a href=#581 id=581 data-nosnippet>581</a></span><span class="kw">pub fn </span>secp256r1_normalize_public_key(
+<a href=#582 id=582 data-nosnippet>582</a>    public_key: Vec&lt;u8&gt;,
+<a href=#583 id=583 data-nosnippet>583</a>    compressed: bool,
+<a href=#584 id=584 data-nosnippet>584</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#585 id=585 data-nosnippet>585</a>    normalize_secp256r1_public_key(<span class="kw-2">&amp;</span>public_key, compressed)
+<a href=#586 id=586 data-nosnippet>586</a>}
+<a href=#587 id=587 data-nosnippet>587</a>
+<a href=#588 id=588 data-nosnippet>588</a><span class="attr">#[uniffi::export]
+<a href=#589 id=589 data-nosnippet>589</a></span><span class="kw">pub fn </span>secp256r1_sign(
+<a href=#590 id=590 data-nosnippet>590</a>    private_key: Vec&lt;u8&gt;,
+<a href=#591 id=591 data-nosnippet>591</a>    message: Vec&lt;u8&gt;,
+<a href=#592 id=592 data-nosnippet>592</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#593 id=593 data-nosnippet>593</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
+<a href=#594 id=594 data-nosnippet>594</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
+<a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
+<a href=#596 id=596 data-nosnippet>596</a>    <span class="kw">let </span>sig = kp.sign(<span class="kw-2">&amp;</span>message);
+<a href=#597 id=597 data-nosnippet>597</a>    private_key.zeroize();
+<a href=#598 id=598 data-nosnippet>598</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
+<a href=#599 id=599 data-nosnippet>599</a>}
+<a href=#600 id=600 data-nosnippet>600</a>
+<a href=#601 id=601 data-nosnippet>601</a><span class="doccomment">/// Aptos' P-256 convention hashes transaction and message bytes with SHA3-256.
+<a href=#602 id=602 data-nosnippet>602</a>///
+<a href=#603 id=603 data-nosnippet>603</a>/// This operation is deliberately separate from [`secp256r1_sign`], whose SHA-256 behavior is
+<a href=#604 id=604 data-nosnippet>604</a>/// retained for standards such as WebAuthn.
+<a href=#605 id=605 data-nosnippet>605</a></span><span class="attr">#[uniffi::export]
+<a href=#606 id=606 data-nosnippet>606</a></span><span class="kw">pub fn </span>secp256r1_sign_sha3_256(
+<a href=#607 id=607 data-nosnippet>607</a>    private_key: Vec&lt;u8&gt;,
+<a href=#608 id=608 data-nosnippet>608</a>    message: Vec&lt;u8&gt;,
+<a href=#609 id=609 data-nosnippet>609</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#610 id=610 data-nosnippet>610</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
+<a href=#611 id=611 data-nosnippet>611</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
+<a href=#612 id=612 data-nosnippet>612</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
+<a href=#613 id=613 data-nosnippet>613</a>    <span class="kw">let </span>sig = kp.sign_with_hash::&lt;Sha3_256&gt;(<span class="kw-2">&amp;</span>message);
+<a href=#614 id=614 data-nosnippet>614</a>    private_key.zeroize();
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
+<a href=#616 id=616 data-nosnippet>616</a>}
+<a href=#617 id=617 data-nosnippet>617</a>
+<a href=#618 id=618 data-nosnippet>618</a><span class="attr">#[uniffi::export]
+<a href=#619 id=619 data-nosnippet>619</a></span><span class="kw">pub fn </span>mnemonic_generate(word_count: u32) -&gt; <span class="prelude-ty">Result</span>&lt;String, FastCryptoFfiError&gt; {
+<a href=#620 id=620 data-nosnippet>620</a>    <span class="kw">let </span>count = ensure_mnemonic_word_count(word_count <span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#621 id=621 data-nosnippet>621</a>    <span class="kw">let </span>mnemonic = Mnemonic::generate_in(Language::English, count)
+<a href=#622 id=622 data-nosnippet>622</a>        .map_err(|<span class="kw">_</span>| FastCryptoFfiError::InvalidInput)<span class="question-mark">?</span>;
+<a href=#623 id=623 data-nosnippet>623</a>    <span class="prelude-val">Ok</span>(mnemonic.to_string())
+<a href=#624 id=624 data-nosnippet>624</a>}
+<a href=#625 id=625 data-nosnippet>625</a>
+<a href=#626 id=626 data-nosnippet>626</a><span class="attr">#[uniffi::export]
+<a href=#627 id=627 data-nosnippet>627</a></span><span class="kw">pub fn </span>mnemonic_validate(phrase: String) -&gt; bool {
+<a href=#628 id=628 data-nosnippet>628</a>    Mnemonic::parse_in_normalized(Language::English, <span class="kw-2">&amp;</span>phrase).is_ok()
+<a href=#629 id=629 data-nosnippet>629</a>}
+<a href=#630 id=630 data-nosnippet>630</a>
+<a href=#631 id=631 data-nosnippet>631</a><span class="attr">#[uniffi::export]
+<a href=#632 id=632 data-nosnippet>632</a></span><span class="kw">pub fn </span>mnemonic_to_seed(phrase: String, passphrase: String) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#633 id=633 data-nosnippet>633</a>    <span class="kw">let </span>mnemonic = parse_mnemonic(<span class="kw-2">&amp;</span>phrase)<span class="question-mark">?</span>;
+<a href=#634 id=634 data-nosnippet>634</a>    <span class="kw">let </span>seed = mnemonic.to_seed(passphrase);
+<a href=#635 id=635 data-nosnippet>635</a>    <span class="prelude-val">Ok</span>(seed.to_vec())
+<a href=#636 id=636 data-nosnippet>636</a>}
+<a href=#637 id=637 data-nosnippet>637</a>
+<a href=#638 id=638 data-nosnippet>638</a><span class="attr">#[uniffi::export]
+<a href=#639 id=639 data-nosnippet>639</a></span><span class="kw">pub fn </span>mnemonic_derive_private_key(
+<a href=#640 id=640 data-nosnippet>640</a>    phrase: String,
+<a href=#641 id=641 data-nosnippet>641</a>    passphrase: String,
+<a href=#642 id=642 data-nosnippet>642</a>    scheme: SignatureScheme,
+<a href=#643 id=643 data-nosnippet>643</a>    path: String,
+<a href=#644 id=644 data-nosnippet>644</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#645 id=645 data-nosnippet>645</a>    <span class="kw">let </span>mnemonic = parse_mnemonic(<span class="kw-2">&amp;</span>phrase)<span class="question-mark">?</span>;
+<a href=#646 id=646 data-nosnippet>646</a>    <span class="kw">let </span>seed = mnemonic.to_seed(passphrase);
+<a href=#647 id=647 data-nosnippet>647</a>    <span class="kw">match </span>scheme {
+<a href=#648 id=648 data-nosnippet>648</a>        SignatureScheme::Ed25519 =&gt; ed25519_derive_private_key(seed.as_ref(), <span class="kw-2">&amp;</span>path),
+<a href=#649 id=649 data-nosnippet>649</a>        SignatureScheme::Secp256k1 | SignatureScheme::Secp256r1 =&gt; {
+<a href=#650 id=650 data-nosnippet>650</a>            bip32_derive_private_key(seed.as_ref(), <span class="kw-2">&amp;</span>path)
+<a href=#651 id=651 data-nosnippet>651</a>        }
+<a href=#652 id=652 data-nosnippet>652</a>    }
+<a href=#653 id=653 data-nosnippet>653</a>}
+<a href=#654 id=654 data-nosnippet>654</a>
+<a href=#655 id=655 data-nosnippet>655</a><span class="attr">#[uniffi::export]
+<a href=#656 id=656 data-nosnippet>656</a></span><span class="kw">pub fn </span>mnemonic_derive_public_key(
+<a href=#657 id=657 data-nosnippet>657</a>    phrase: String,
+<a href=#658 id=658 data-nosnippet>658</a>    passphrase: String,
+<a href=#659 id=659 data-nosnippet>659</a>    scheme: SignatureScheme,
+<a href=#660 id=660 data-nosnippet>660</a>    path: String,
+<a href=#661 id=661 data-nosnippet>661</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#662 id=662 data-nosnippet>662</a>    <span class="kw">let </span>private_key = mnemonic_derive_private_key(phrase, passphrase, scheme, path)<span class="question-mark">?</span>;
+<a href=#663 id=663 data-nosnippet>663</a>    <span class="kw">match </span>scheme {
+<a href=#664 id=664 data-nosnippet>664</a>        SignatureScheme::Ed25519 =&gt; ed25519_public_key_from_private(private_key),
+<a href=#665 id=665 data-nosnippet>665</a>        SignatureScheme::Secp256k1 =&gt; secp256k1_public_key_from_private(private_key),
+<a href=#666 id=666 data-nosnippet>666</a>        SignatureScheme::Secp256r1 =&gt; secp256r1_public_key_from_private(private_key),
+<a href=#667 id=667 data-nosnippet>667</a>    }
+<a href=#668 id=668 data-nosnippet>668</a>}
+<a href=#669 id=669 data-nosnippet>669</a>
+<a href=#670 id=670 data-nosnippet>670</a><span class="attr">#[uniffi::export]
+<a href=#671 id=671 data-nosnippet>671</a></span><span class="kw">pub fn </span>mnemonic_derive_keypair(
+<a href=#672 id=672 data-nosnippet>672</a>    phrase: String,
+<a href=#673 id=673 data-nosnippet>673</a>    passphrase: String,
+<a href=#674 id=674 data-nosnippet>674</a>    scheme: SignatureScheme,
+<a href=#675 id=675 data-nosnippet>675</a>    path: String,
+<a href=#676 id=676 data-nosnippet>676</a>) -&gt; <span class="prelude-ty">Result</span>&lt;KeyPairBytes, FastCryptoFfiError&gt; {
+<a href=#677 id=677 data-nosnippet>677</a>    <span class="kw">let </span>private_key = mnemonic_derive_private_key(phrase, passphrase, scheme, path)<span class="question-mark">?</span>;
+<a href=#678 id=678 data-nosnippet>678</a>    <span class="kw">let </span>public_key = <span class="kw">match </span>scheme {
+<a href=#679 id=679 data-nosnippet>679</a>        SignatureScheme::Ed25519 =&gt; ed25519_public_key_from_private(private_key.clone())<span class="question-mark">?</span>,
+<a href=#680 id=680 data-nosnippet>680</a>        SignatureScheme::Secp256k1 =&gt; secp256k1_public_key_from_private(private_key.clone())<span class="question-mark">?</span>,
+<a href=#681 id=681 data-nosnippet>681</a>        SignatureScheme::Secp256r1 =&gt; secp256r1_public_key_from_private(private_key.clone())<span class="question-mark">?</span>,
+<a href=#682 id=682 data-nosnippet>682</a>    };
+<a href=#683 id=683 data-nosnippet>683</a>    <span class="prelude-val">Ok</span>(KeyPairBytes {
+<a href=#684 id=684 data-nosnippet>684</a>        public_key,
+<a href=#685 id=685 data-nosnippet>685</a>        private_key,
+<a href=#686 id=686 data-nosnippet>686</a>    })
+<a href=#687 id=687 data-nosnippet>687</a>}
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a><span class="attr">#[cfg(test)]
+<a href=#690 id=690 data-nosnippet>690</a></span><span class="kw">mod </span>tests {
+<a href=#691 id=691 data-nosnippet>691</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#692 id=692 data-nosnippet>692</a>    <span class="kw">use </span>ark_bn254::{Bn254, Fr};
+<a href=#693 id=693 data-nosnippet>693</a>    <span class="kw">use </span>ark_ff::UniformRand;
+<a href=#694 id=694 data-nosnippet>694</a>    <span class="kw">use </span>ark_groth16::Groth16;
+<a href=#695 id=695 data-nosnippet>695</a>    <span class="kw">use </span>ark_serialize::CanonicalSerialize;
+<a href=#696 id=696 data-nosnippet>696</a>    <span class="kw">use </span>ark_snark::SNARK;
+<a href=#697 id=697 data-nosnippet>697</a>    <span class="kw">use </span>ark_std::rand::thread_rng;
+<a href=#698 id=698 data-nosnippet>698</a>    <span class="kw">use </span>fastcrypto::ed25519::{
+<a href=#699 id=699 data-nosnippet>699</a>        ED25519_PRIVATE_KEY_LENGTH, ED25519_PUBLIC_KEY_LENGTH, ED25519_SIGNATURE_LENGTH,
+<a href=#700 id=700 data-nosnippet>700</a>    };
+<a href=#701 id=701 data-nosnippet>701</a>    <span class="kw">use </span>fastcrypto::secp256k1::{
+<a href=#702 id=702 data-nosnippet>702</a>        SECP256K1_PRIVATE_KEY_LENGTH, SECP256K1_PUBLIC_KEY_LENGTH, SECP256K1_SIGNATURE_LENGTH,
+<a href=#703 id=703 data-nosnippet>703</a>    };
+<a href=#704 id=704 data-nosnippet>704</a>    <span class="kw">use </span>fastcrypto::secp256r1::{
+<a href=#705 id=705 data-nosnippet>705</a>        SECP256R1_PRIVATE_KEY_LENGTH, SECP256R1_PUBLIC_KEY_LENGTH, SECP256R1_SIGNATURE_LENTH,
+<a href=#706 id=706 data-nosnippet>706</a>    };
+<a href=#707 id=707 data-nosnippet>707</a>    <span class="kw">use </span>fastcrypto_zkp::dummy_circuits::DummyCircuit;
+<a href=#708 id=708 data-nosnippet>708</a>
+<a href=#709 id=709 data-nosnippet>709</a>    <span class="kw">const </span>TEST_MNEMONIC: <span class="kw-2">&amp;</span>str =
+<a href=#710 id=710 data-nosnippet>710</a>        <span class="string">"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"</span>;
 <a href=#711 id=711 data-nosnippet>711</a>
-<a href=#712 id=712 data-nosnippet>712</a>        <span class="kw">let </span><span class="kw-2">mut </span>public_input_bytes = Vec::new();
-<a href=#713 id=713 data-nosnippet>713</a>        public_input
-<a href=#714 id=714 data-nosnippet>714</a>            .serialize_compressed(<span class="kw-2">&amp;mut </span>public_input_bytes)
-<a href=#715 id=715 data-nosnippet>715</a>            .unwrap();
-<a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">let </span><span class="kw-2">mut </span>proof_bytes = Vec::new();
-<a href=#717 id=717 data-nosnippet>717</a>        proof.a.serialize_compressed(<span class="kw-2">&amp;mut </span>proof_bytes).unwrap();
-<a href=#718 id=718 data-nosnippet>718</a>        proof.b.serialize_compressed(<span class="kw-2">&amp;mut </span>proof_bytes).unwrap();
-<a href=#719 id=719 data-nosnippet>719</a>        proof.c.serialize_compressed(<span class="kw-2">&amp;mut </span>proof_bytes).unwrap();
-<a href=#720 id=720 data-nosnippet>720</a>        <span class="macro">assert_eq!</span>(proof_bytes.len(), <span class="number">128</span>);
-<a href=#721 id=721 data-nosnippet>721</a>
-<a href=#722 id=722 data-nosnippet>722</a>        <span class="macro">assert!</span>(bn254_verify_groth16(
-<a href=#723 id=723 data-nosnippet>723</a>            prepared.clone(),
-<a href=#724 id=724 data-nosnippet>724</a>            public_input_bytes.clone(),
-<a href=#725 id=725 data-nosnippet>725</a>            proof_bytes.clone(),
-<a href=#726 id=726 data-nosnippet>726</a>        )
-<a href=#727 id=727 data-nosnippet>727</a>        .unwrap());
-<a href=#728 id=728 data-nosnippet>728</a>
-<a href=#729 id=729 data-nosnippet>729</a>        public_input_bytes[<span class="number">0</span>] ^= <span class="number">1</span>;
-<a href=#730 id=730 data-nosnippet>730</a>        <span class="macro">assert!</span>(!bn254_verify_groth16(prepared, public_input_bytes, proof_bytes).unwrap());
-<a href=#731 id=731 data-nosnippet>731</a>    }
-<a href=#732 id=732 data-nosnippet>732</a>
-<a href=#733 id=733 data-nosnippet>733</a>    <span class="attr">#[test]
-<a href=#734 id=734 data-nosnippet>734</a>    </span><span class="kw">fn </span>ed25519_keypair_sign_verify_roundtrip() {
-<a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">let </span>message = <span class="string">b"fastcrypto-ed25519"</span>.to_vec();
-<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">let </span>kp = ed25519_generate_keypair();
-<a href=#737 id=737 data-nosnippet>737</a>        <span class="macro">assert_eq!</span>(kp.public_key.len(), ED25519_PUBLIC_KEY_LENGTH);
-<a href=#738 id=738 data-nosnippet>738</a>        <span class="macro">assert_eq!</span>(kp.private_key.len(), ED25519_PRIVATE_KEY_LENGTH);
-<a href=#739 id=739 data-nosnippet>739</a>
-<a href=#740 id=740 data-nosnippet>740</a>        <span class="kw">let </span>signature = ed25519_sign(kp.private_key.clone(), message.clone()).unwrap();
-<a href=#741 id=741 data-nosnippet>741</a>        <span class="macro">assert_eq!</span>(signature.len(), ED25519_SIGNATURE_LENGTH);
-<a href=#742 id=742 data-nosnippet>742</a>        <span class="kw">let </span>verified = ed25519_verify(kp.public_key.clone(), message, signature).unwrap();
-<a href=#743 id=743 data-nosnippet>743</a>        <span class="macro">assert!</span>(verified);
-<a href=#744 id=744 data-nosnippet>744</a>    }
+<a href=#712 id=712 data-nosnippet>712</a>    <span class="attr">#[test]
+<a href=#713 id=713 data-nosnippet>713</a>    </span><span class="kw">fn </span>bn254_poseidon_matches_known_aptos_vectors() {
+<a href=#714 id=714 data-nosnippet>714</a>        <span class="kw">let </span><span class="kw-2">mut </span>one = <span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">32</span>];
+<a href=#715 id=715 data-nosnippet>715</a>        one[<span class="number">0</span>] = <span class="number">1</span>;
+<a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">let </span><span class="kw-2">mut </span>two = <span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">32</span>];
+<a href=#717 id=717 data-nosnippet>717</a>        two[<span class="number">0</span>] = <span class="number">2</span>;
+<a href=#718 id=718 data-nosnippet>718</a>
+<a href=#719 id=719 data-nosnippet>719</a>        <span class="macro">assert_eq!</span>(
+<a href=#720 id=720 data-nosnippet>720</a>            hex::encode(bn254_poseidon_hash(<span class="macro">vec!</span>[one.clone()]).unwrap()),
+<a href=#721 id=721 data-nosnippet>721</a>            <span class="string">"33018202c57d898b84338b16d1a4960e133c6a4d656cfec1bd62a9ea00611729"
+<a href=#722 id=722 data-nosnippet>722</a>        </span>);
+<a href=#723 id=723 data-nosnippet>723</a>        <span class="macro">assert_eq!</span>(
+<a href=#724 id=724 data-nosnippet>724</a>            hex::encode(bn254_poseidon_hash(<span class="macro">vec!</span>[one, two]).unwrap()),
+<a href=#725 id=725 data-nosnippet>725</a>            <span class="string">"9a1817447a60199e51453274f217362acfe962966b4cf63d4190d6e7f5c05c11"
+<a href=#726 id=726 data-nosnippet>726</a>        </span>);
+<a href=#727 id=727 data-nosnippet>727</a>        <span class="macro">assert!</span>(bn254_poseidon_hash(<span class="macro">vec!</span>[]).is_err());
+<a href=#728 id=728 data-nosnippet>728</a>        <span class="macro">assert!</span>(bn254_poseidon_hash(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">0u8</span>; <span class="number">31</span>]]).is_err());
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="macro">assert!</span>(bn254_poseidon_hash(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">0xff</span>; <span class="number">32</span>]]).is_err());
+<a href=#730 id=730 data-nosnippet>730</a>    }
+<a href=#731 id=731 data-nosnippet>731</a>
+<a href=#732 id=732 data-nosnippet>732</a>    <span class="attr">#[test]
+<a href=#733 id=733 data-nosnippet>733</a>    </span><span class="kw">fn </span>bn254_groth16_prepare_and_verify_roundtrip() {
+<a href=#734 id=734 data-nosnippet>734</a>        <span class="kw">let </span>rng = <span class="kw-2">&amp;mut </span>thread_rng();
+<a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">let </span>circuit = DummyCircuit::&lt;Fr&gt; {
+<a href=#736 id=736 data-nosnippet>736</a>            a: <span class="prelude-val">Some</span>(Fr::rand(rng)),
+<a href=#737 id=737 data-nosnippet>737</a>            b: <span class="prelude-val">Some</span>(Fr::rand(rng)),
+<a href=#738 id=738 data-nosnippet>738</a>            num_variables: <span class="number">16</span>,
+<a href=#739 id=739 data-nosnippet>739</a>            num_constraints: <span class="number">4</span>,
+<a href=#740 id=740 data-nosnippet>740</a>        };
+<a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">let </span>(proving_key, verifying_key) =
+<a href=#742 id=742 data-nosnippet>742</a>            Groth16::&lt;Bn254&gt;::circuit_specific_setup(circuit, rng).unwrap();
+<a href=#743 id=743 data-nosnippet>743</a>        <span class="kw">let </span>proof = Groth16::&lt;Bn254&gt;::prove(<span class="kw-2">&amp;</span>proving_key, circuit, rng).unwrap();
+<a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">let </span>public_input = circuit.a.unwrap() * circuit.b.unwrap();
 <a href=#745 id=745 data-nosnippet>745</a>
-<a href=#746 id=746 data-nosnippet>746</a>    <span class="attr">#[test]
-<a href=#747 id=747 data-nosnippet>747</a>    </span><span class="kw">fn </span>secp256k1_keypair_sign_verify_roundtrip() {
-<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>message = <span class="string">b"fastcrypto-secp256k1"</span>.to_vec();
-<a href=#749 id=749 data-nosnippet>749</a>        <span class="kw">let </span>kp = secp256k1_generate_keypair();
-<a href=#750 id=750 data-nosnippet>750</a>        <span class="macro">assert_eq!</span>(kp.public_key.len(), SECP256K1_PUBLIC_KEY_LENGTH);
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="macro">assert_eq!</span>(kp.private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH);
-<a href=#752 id=752 data-nosnippet>752</a>
-<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw">let </span>signature = secp256k1_sign(kp.private_key.clone(), message.clone()).unwrap();
-<a href=#754 id=754 data-nosnippet>754</a>        <span class="macro">assert_eq!</span>(signature.len(), SECP256K1_SIGNATURE_LENGTH);
-<a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">let </span>verified = secp256k1_verify(kp.public_key.clone(), message, signature).unwrap();
-<a href=#756 id=756 data-nosnippet>756</a>        <span class="macro">assert!</span>(verified);
-<a href=#757 id=757 data-nosnippet>757</a>    }
-<a href=#758 id=758 data-nosnippet>758</a>
-<a href=#759 id=759 data-nosnippet>759</a>    <span class="attr">#[test]
-<a href=#760 id=760 data-nosnippet>760</a>    </span><span class="kw">fn </span>secp256r1_keypair_sign_verify_roundtrip() {
-<a href=#761 id=761 data-nosnippet>761</a>        <span class="kw">let </span>message = <span class="string">b"fastcrypto-secp256r1"</span>.to_vec();
-<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">let </span>kp = secp256r1_generate_keypair();
-<a href=#763 id=763 data-nosnippet>763</a>        <span class="macro">assert_eq!</span>(kp.public_key.len(), SECP256R1_PUBLIC_KEY_LENGTH);
-<a href=#764 id=764 data-nosnippet>764</a>        <span class="macro">assert_eq!</span>(kp.private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH);
-<a href=#765 id=765 data-nosnippet>765</a>
-<a href=#766 id=766 data-nosnippet>766</a>        <span class="kw">let </span>signature = secp256r1_sign(kp.private_key.clone(), message.clone()).unwrap();
-<a href=#767 id=767 data-nosnippet>767</a>        <span class="macro">assert_eq!</span>(signature.len(), SECP256R1_SIGNATURE_LENTH);
-<a href=#768 id=768 data-nosnippet>768</a>        <span class="kw">let </span>verified = secp256r1_verify(kp.public_key.clone(), message, signature).unwrap();
-<a href=#769 id=769 data-nosnippet>769</a>        <span class="macro">assert!</span>(verified);
-<a href=#770 id=770 data-nosnippet>770</a>    }
-<a href=#771 id=771 data-nosnippet>771</a>
-<a href=#772 id=772 data-nosnippet>772</a>    <span class="attr">#[test]
-<a href=#773 id=773 data-nosnippet>773</a>    </span><span class="kw">fn </span>secp256r1_sha3_sign_verify_roundtrip() {
-<a href=#774 id=774 data-nosnippet>774</a>        <span class="kw">let </span>message = <span class="string">b"aptos-secp256r1"</span>.to_vec();
-<a href=#775 id=775 data-nosnippet>775</a>        <span class="kw">let </span>kp = secp256r1_generate_keypair();
-<a href=#776 id=776 data-nosnippet>776</a>
-<a href=#777 id=777 data-nosnippet>777</a>        <span class="kw">let </span>signature = secp256r1_sign_sha3_256(kp.private_key.clone(), message.clone()).unwrap();
-<a href=#778 id=778 data-nosnippet>778</a>        <span class="macro">assert_eq!</span>(signature.len(), SECP256R1_SIGNATURE_LENTH);
-<a href=#779 id=779 data-nosnippet>779</a>        <span class="macro">assert!</span>(secp256r1_verify_sha3_256(
-<a href=#780 id=780 data-nosnippet>780</a>            kp.public_key.clone(),
-<a href=#781 id=781 data-nosnippet>781</a>            message.clone(),
-<a href=#782 id=782 data-nosnippet>782</a>            signature.clone(),
-<a href=#783 id=783 data-nosnippet>783</a>        )
-<a href=#784 id=784 data-nosnippet>784</a>        .unwrap());
-<a href=#785 id=785 data-nosnippet>785</a>        <span class="macro">assert!</span>(!secp256r1_verify(kp.public_key, message, signature).unwrap());
-<a href=#786 id=786 data-nosnippet>786</a>    }
-<a href=#787 id=787 data-nosnippet>787</a>
-<a href=#788 id=788 data-nosnippet>788</a>    <span class="attr">#[test]
-<a href=#789 id=789 data-nosnippet>789</a>    </span><span class="kw">fn </span>secp256r1_public_key_normalization_accepts_both_sec1_forms() {
-<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">let </span>kp = secp256r1_generate_keypair();
-<a href=#791 id=791 data-nosnippet>791</a>        <span class="kw">let </span>uncompressed = secp256r1_normalize_public_key(kp.public_key.clone(), <span class="bool-val">false</span>).unwrap();
-<a href=#792 id=792 data-nosnippet>792</a>        <span class="macro">assert_eq!</span>(uncompressed.len(), <span class="number">65</span>);
-<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span>compressed = secp256r1_normalize_public_key(uncompressed, <span class="bool-val">true</span>).unwrap();
-<a href=#794 id=794 data-nosnippet>794</a>        <span class="macro">assert_eq!</span>(compressed, kp.public_key);
-<a href=#795 id=795 data-nosnippet>795</a>    }
-<a href=#796 id=796 data-nosnippet>796</a>
-<a href=#797 id=797 data-nosnippet>797</a>    <span class="attr">#[test]
-<a href=#798 id=798 data-nosnippet>798</a>    </span><span class="kw">fn </span>mnemonic_generation_and_validation() {
-<a href=#799 id=799 data-nosnippet>799</a>        <span class="kw">for </span><span class="kw-2">&amp;</span>count <span class="kw">in </span><span class="kw-2">&amp;</span>[<span class="number">12u32</span>, <span class="number">15</span>, <span class="number">18</span>, <span class="number">21</span>, <span class="number">24</span>] {
-<a href=#800 id=800 data-nosnippet>800</a>            <span class="kw">let </span>phrase = mnemonic_generate(count).unwrap();
-<a href=#801 id=801 data-nosnippet>801</a>            <span class="macro">assert!</span>(mnemonic_validate(phrase));
-<a href=#802 id=802 data-nosnippet>802</a>        }
-<a href=#803 id=803 data-nosnippet>803</a>
-<a href=#804 id=804 data-nosnippet>804</a>        <span class="macro">assert!</span>(mnemonic_generate(<span class="number">11</span>).is_err());
-<a href=#805 id=805 data-nosnippet>805</a>        <span class="macro">assert!</span>(mnemonic_generate(<span class="number">13</span>).is_err());
-<a href=#806 id=806 data-nosnippet>806</a>        <span class="macro">assert!</span>(!mnemonic_validate(<span class="string">"not a valid mnemonic"</span>.to_string()));
-<a href=#807 id=807 data-nosnippet>807</a>    }
-<a href=#808 id=808 data-nosnippet>808</a>
-<a href=#809 id=809 data-nosnippet>809</a>    <span class="attr">#[test]
-<a href=#810 id=810 data-nosnippet>810</a>    </span><span class="kw">fn </span>mnemonic_seed_length() {
-<a href=#811 id=811 data-nosnippet>811</a>        <span class="kw">let </span>seed = mnemonic_to_seed(TEST_MNEMONIC.to_string(), <span class="string">""</span>.to_string()).unwrap();
-<a href=#812 id=812 data-nosnippet>812</a>        <span class="macro">assert_eq!</span>(seed.len(), <span class="number">64</span>);
-<a href=#813 id=813 data-nosnippet>813</a>    }
-<a href=#814 id=814 data-nosnippet>814</a>
-<a href=#815 id=815 data-nosnippet>815</a>    <span class="attr">#[test]
-<a href=#816 id=816 data-nosnippet>816</a>    </span><span class="kw">fn </span>mnemonic_derive_keys_all_schemes() {
-<a href=#817 id=817 data-nosnippet>817</a>        <span class="kw">let </span>path = <span class="string">"m/44'/784'/0'/0'/0'"</span>.to_string();
-<a href=#818 id=818 data-nosnippet>818</a>
-<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span>ed_priv = mnemonic_derive_private_key(
-<a href=#820 id=820 data-nosnippet>820</a>            TEST_MNEMONIC.to_string(),
-<a href=#821 id=821 data-nosnippet>821</a>            <span class="string">""</span>.to_string(),
-<a href=#822 id=822 data-nosnippet>822</a>            SignatureScheme::Ed25519,
-<a href=#823 id=823 data-nosnippet>823</a>            path.clone(),
-<a href=#824 id=824 data-nosnippet>824</a>        )
-<a href=#825 id=825 data-nosnippet>825</a>        .unwrap();
-<a href=#826 id=826 data-nosnippet>826</a>        <span class="macro">assert_eq!</span>(ed_priv.len(), ED25519_PRIVATE_KEY_LENGTH);
-<a href=#827 id=827 data-nosnippet>827</a>        <span class="kw">let </span>ed_pub = mnemonic_derive_public_key(
-<a href=#828 id=828 data-nosnippet>828</a>            TEST_MNEMONIC.to_string(),
-<a href=#829 id=829 data-nosnippet>829</a>            <span class="string">""</span>.to_string(),
-<a href=#830 id=830 data-nosnippet>830</a>            SignatureScheme::Ed25519,
-<a href=#831 id=831 data-nosnippet>831</a>            path.clone(),
-<a href=#832 id=832 data-nosnippet>832</a>        )
-<a href=#833 id=833 data-nosnippet>833</a>        .unwrap();
-<a href=#834 id=834 data-nosnippet>834</a>        <span class="macro">assert_eq!</span>(ed_pub.len(), ED25519_PUBLIC_KEY_LENGTH);
-<a href=#835 id=835 data-nosnippet>835</a>
-<a href=#836 id=836 data-nosnippet>836</a>        <span class="kw">let </span>k1_priv = mnemonic_derive_private_key(
-<a href=#837 id=837 data-nosnippet>837</a>            TEST_MNEMONIC.to_string(),
-<a href=#838 id=838 data-nosnippet>838</a>            <span class="string">""</span>.to_string(),
-<a href=#839 id=839 data-nosnippet>839</a>            SignatureScheme::Secp256k1,
-<a href=#840 id=840 data-nosnippet>840</a>            <span class="string">"m/44'/0'/0'/0/0"</span>.to_string(),
-<a href=#841 id=841 data-nosnippet>841</a>        )
-<a href=#842 id=842 data-nosnippet>842</a>        .unwrap();
-<a href=#843 id=843 data-nosnippet>843</a>        <span class="macro">assert_eq!</span>(k1_priv.len(), SECP256K1_PRIVATE_KEY_LENGTH);
-<a href=#844 id=844 data-nosnippet>844</a>        <span class="kw">let </span>k1_pub = mnemonic_derive_public_key(
-<a href=#845 id=845 data-nosnippet>845</a>            TEST_MNEMONIC.to_string(),
-<a href=#846 id=846 data-nosnippet>846</a>            <span class="string">""</span>.to_string(),
-<a href=#847 id=847 data-nosnippet>847</a>            SignatureScheme::Secp256k1,
-<a href=#848 id=848 data-nosnippet>848</a>            <span class="string">"m/44'/0'/0'/0/0"</span>.to_string(),
-<a href=#849 id=849 data-nosnippet>849</a>        )
-<a href=#850 id=850 data-nosnippet>850</a>        .unwrap();
-<a href=#851 id=851 data-nosnippet>851</a>        <span class="macro">assert_eq!</span>(k1_pub.len(), SECP256K1_PUBLIC_KEY_LENGTH);
-<a href=#852 id=852 data-nosnippet>852</a>
-<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw">let </span>r1_priv = mnemonic_derive_private_key(
-<a href=#854 id=854 data-nosnippet>854</a>            TEST_MNEMONIC.to_string(),
-<a href=#855 id=855 data-nosnippet>855</a>            <span class="string">""</span>.to_string(),
-<a href=#856 id=856 data-nosnippet>856</a>            SignatureScheme::Secp256r1,
-<a href=#857 id=857 data-nosnippet>857</a>            <span class="string">"m/44'/0'/0'/0/1"</span>.to_string(),
-<a href=#858 id=858 data-nosnippet>858</a>        )
-<a href=#859 id=859 data-nosnippet>859</a>        .unwrap();
-<a href=#860 id=860 data-nosnippet>860</a>        <span class="macro">assert_eq!</span>(r1_priv.len(), SECP256R1_PRIVATE_KEY_LENGTH);
-<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>r1_pub = mnemonic_derive_public_key(
-<a href=#862 id=862 data-nosnippet>862</a>            TEST_MNEMONIC.to_string(),
-<a href=#863 id=863 data-nosnippet>863</a>            <span class="string">""</span>.to_string(),
-<a href=#864 id=864 data-nosnippet>864</a>            SignatureScheme::Secp256r1,
-<a href=#865 id=865 data-nosnippet>865</a>            <span class="string">"m/44'/0'/0'/0/1"</span>.to_string(),
-<a href=#866 id=866 data-nosnippet>866</a>        )
-<a href=#867 id=867 data-nosnippet>867</a>        .unwrap();
-<a href=#868 id=868 data-nosnippet>868</a>        <span class="macro">assert_eq!</span>(r1_pub.len(), SECP256R1_PUBLIC_KEY_LENGTH);
-<a href=#869 id=869 data-nosnippet>869</a>    }
-<a href=#870 id=870 data-nosnippet>870</a>
-<a href=#871 id=871 data-nosnippet>871</a>    <span class="attr">#[test]
-<a href=#872 id=872 data-nosnippet>872</a>    </span><span class="kw">fn </span>ed25519_rejects_non_hardened_path() {
-<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw">let </span>result = mnemonic_derive_private_key(
+<a href=#746 id=746 data-nosnippet>746</a>        <span class="kw">let </span><span class="kw-2">mut </span>verifying_key_bytes = Vec::new();
+<a href=#747 id=747 data-nosnippet>747</a>        verifying_key
+<a href=#748 id=748 data-nosnippet>748</a>            .serialize_compressed(<span class="kw-2">&amp;mut </span>verifying_key_bytes)
+<a href=#749 id=749 data-nosnippet>749</a>            .unwrap();
+<a href=#750 id=750 data-nosnippet>750</a>        <span class="kw">let </span>prepared = bn254_prepare_groth16_verifying_key(verifying_key_bytes).unwrap();
+<a href=#751 id=751 data-nosnippet>751</a>
+<a href=#752 id=752 data-nosnippet>752</a>        <span class="kw">let </span><span class="kw-2">mut </span>public_input_bytes = Vec::new();
+<a href=#753 id=753 data-nosnippet>753</a>        public_input
+<a href=#754 id=754 data-nosnippet>754</a>            .serialize_compressed(<span class="kw-2">&amp;mut </span>public_input_bytes)
+<a href=#755 id=755 data-nosnippet>755</a>            .unwrap();
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">let </span><span class="kw-2">mut </span>proof_bytes = Vec::new();
+<a href=#757 id=757 data-nosnippet>757</a>        proof.a.serialize_compressed(<span class="kw-2">&amp;mut </span>proof_bytes).unwrap();
+<a href=#758 id=758 data-nosnippet>758</a>        proof.b.serialize_compressed(<span class="kw-2">&amp;mut </span>proof_bytes).unwrap();
+<a href=#759 id=759 data-nosnippet>759</a>        proof.c.serialize_compressed(<span class="kw-2">&amp;mut </span>proof_bytes).unwrap();
+<a href=#760 id=760 data-nosnippet>760</a>        <span class="macro">assert_eq!</span>(proof_bytes.len(), <span class="number">128</span>);
+<a href=#761 id=761 data-nosnippet>761</a>
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="macro">assert!</span>(bn254_verify_groth16(
+<a href=#763 id=763 data-nosnippet>763</a>            prepared.clone(),
+<a href=#764 id=764 data-nosnippet>764</a>            public_input_bytes.clone(),
+<a href=#765 id=765 data-nosnippet>765</a>            proof_bytes.clone(),
+<a href=#766 id=766 data-nosnippet>766</a>        )
+<a href=#767 id=767 data-nosnippet>767</a>        .unwrap());
+<a href=#768 id=768 data-nosnippet>768</a>
+<a href=#769 id=769 data-nosnippet>769</a>        public_input_bytes[<span class="number">0</span>] ^= <span class="number">1</span>;
+<a href=#770 id=770 data-nosnippet>770</a>        <span class="macro">assert!</span>(!bn254_verify_groth16(prepared, public_input_bytes, proof_bytes).unwrap());
+<a href=#771 id=771 data-nosnippet>771</a>    }
+<a href=#772 id=772 data-nosnippet>772</a>
+<a href=#773 id=773 data-nosnippet>773</a>    <span class="attr">#[test]
+<a href=#774 id=774 data-nosnippet>774</a>    </span><span class="kw">fn </span>ed25519_keypair_sign_verify_roundtrip() {
+<a href=#775 id=775 data-nosnippet>775</a>        <span class="kw">let </span>message = <span class="string">b"fastcrypto-ed25519"</span>.to_vec();
+<a href=#776 id=776 data-nosnippet>776</a>        <span class="kw">let </span>kp = ed25519_generate_keypair();
+<a href=#777 id=777 data-nosnippet>777</a>        <span class="macro">assert_eq!</span>(kp.public_key.len(), ED25519_PUBLIC_KEY_LENGTH);
+<a href=#778 id=778 data-nosnippet>778</a>        <span class="macro">assert_eq!</span>(kp.private_key.len(), ED25519_PRIVATE_KEY_LENGTH);
+<a href=#779 id=779 data-nosnippet>779</a>
+<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">let </span>signature = ed25519_sign(kp.private_key.clone(), message.clone()).unwrap();
+<a href=#781 id=781 data-nosnippet>781</a>        <span class="macro">assert_eq!</span>(signature.len(), ED25519_SIGNATURE_LENGTH);
+<a href=#782 id=782 data-nosnippet>782</a>        <span class="kw">let </span>verified = ed25519_verify(kp.public_key.clone(), message, signature).unwrap();
+<a href=#783 id=783 data-nosnippet>783</a>        <span class="macro">assert!</span>(verified);
+<a href=#784 id=784 data-nosnippet>784</a>    }
+<a href=#785 id=785 data-nosnippet>785</a>
+<a href=#786 id=786 data-nosnippet>786</a>    <span class="attr">#[test]
+<a href=#787 id=787 data-nosnippet>787</a>    </span><span class="kw">fn </span>secp256k1_sha3_256_matches_aptos() {
+<a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">let </span>private_key = <span class="macro">vec!</span>[<span class="number">0x11</span>; <span class="number">32</span>];
+<a href=#789 id=789 data-nosnippet>789</a>        <span class="kw">let </span>message = <span class="string">b"flare"</span>.to_vec();
+<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">let </span>public_key = secp256k1_public_key_uncompressed(private_key.clone()).unwrap();
+<a href=#791 id=791 data-nosnippet>791</a>        <span class="macro">assert_eq!</span>(hex::encode(<span class="kw-2">&amp;</span>public_key), <span class="string">"044f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa385b6b1b8ead809ca67454d9683fcf2ba03456d6fe2c4abe2b07f0fbdbb2f1c1"</span>);
+<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">let </span>signature = secp256k1_sign_sha3_256(private_key.clone(), message.clone()).unwrap();
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="macro">assert_eq!</span>(hex::encode(<span class="kw-2">&amp;</span>signature), <span class="string">"5fd8d67ff016b9980faaa40885b7db827aa6ad123437ba0f96cc825f9187af532da425f48045a7dfb612cc8a8cf7e96a9701d176a680614730e6deb9464040fa"</span>);
+<a href=#794 id=794 data-nosnippet>794</a>        <span class="macro">assert!</span>(secp256k1_verify_sha3_256(public_key.clone(), message.clone(), signature.clone()).unwrap());
+<a href=#795 id=795 data-nosnippet>795</a>        <span class="kw">let </span>compressed = secp256k1_public_key_from_private(private_key).unwrap();
+<a href=#796 id=796 data-nosnippet>796</a>        <span class="macro">assert!</span>(secp256k1_verify_sha3_256(compressed, message.clone(), signature.clone()).unwrap());
+<a href=#797 id=797 data-nosnippet>797</a>        <span class="macro">assert!</span>(!secp256k1_verify_sha3_256(public_key, <span class="string">b"other"</span>.to_vec(), signature).unwrap());
+<a href=#798 id=798 data-nosnippet>798</a>    }
+<a href=#799 id=799 data-nosnippet>799</a>
+<a href=#800 id=800 data-nosnippet>800</a>    <span class="attr">#[test]
+<a href=#801 id=801 data-nosnippet>801</a>    </span><span class="kw">fn </span>secp256k1_keypair_sign_verify_roundtrip() {
+<a href=#802 id=802 data-nosnippet>802</a>        <span class="kw">let </span>message = <span class="string">b"fastcrypto-secp256k1"</span>.to_vec();
+<a href=#803 id=803 data-nosnippet>803</a>        <span class="kw">let </span>kp = secp256k1_generate_keypair();
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="macro">assert_eq!</span>(kp.public_key.len(), SECP256K1_PUBLIC_KEY_LENGTH);
+<a href=#805 id=805 data-nosnippet>805</a>        <span class="macro">assert_eq!</span>(kp.private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH);
+<a href=#806 id=806 data-nosnippet>806</a>
+<a href=#807 id=807 data-nosnippet>807</a>        <span class="kw">let </span>signature = secp256k1_sign(kp.private_key.clone(), message.clone()).unwrap();
+<a href=#808 id=808 data-nosnippet>808</a>        <span class="macro">assert_eq!</span>(signature.len(), SECP256K1_SIGNATURE_LENGTH);
+<a href=#809 id=809 data-nosnippet>809</a>        <span class="kw">let </span>verified = secp256k1_verify(kp.public_key.clone(), message, signature).unwrap();
+<a href=#810 id=810 data-nosnippet>810</a>        <span class="macro">assert!</span>(verified);
+<a href=#811 id=811 data-nosnippet>811</a>    }
+<a href=#812 id=812 data-nosnippet>812</a>
+<a href=#813 id=813 data-nosnippet>813</a>    <span class="attr">#[test]
+<a href=#814 id=814 data-nosnippet>814</a>    </span><span class="kw">fn </span>secp256r1_keypair_sign_verify_roundtrip() {
+<a href=#815 id=815 data-nosnippet>815</a>        <span class="kw">let </span>message = <span class="string">b"fastcrypto-secp256r1"</span>.to_vec();
+<a href=#816 id=816 data-nosnippet>816</a>        <span class="kw">let </span>kp = secp256r1_generate_keypair();
+<a href=#817 id=817 data-nosnippet>817</a>        <span class="macro">assert_eq!</span>(kp.public_key.len(), SECP256R1_PUBLIC_KEY_LENGTH);
+<a href=#818 id=818 data-nosnippet>818</a>        <span class="macro">assert_eq!</span>(kp.private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH);
+<a href=#819 id=819 data-nosnippet>819</a>
+<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">let </span>signature = secp256r1_sign(kp.private_key.clone(), message.clone()).unwrap();
+<a href=#821 id=821 data-nosnippet>821</a>        <span class="macro">assert_eq!</span>(signature.len(), SECP256R1_SIGNATURE_LENTH);
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>verified = secp256r1_verify(kp.public_key.clone(), message, signature).unwrap();
+<a href=#823 id=823 data-nosnippet>823</a>        <span class="macro">assert!</span>(verified);
+<a href=#824 id=824 data-nosnippet>824</a>    }
+<a href=#825 id=825 data-nosnippet>825</a>
+<a href=#826 id=826 data-nosnippet>826</a>    <span class="attr">#[test]
+<a href=#827 id=827 data-nosnippet>827</a>    </span><span class="kw">fn </span>secp256r1_sha3_sign_verify_roundtrip() {
+<a href=#828 id=828 data-nosnippet>828</a>        <span class="kw">let </span>message = <span class="string">b"aptos-secp256r1"</span>.to_vec();
+<a href=#829 id=829 data-nosnippet>829</a>        <span class="kw">let </span>kp = secp256r1_generate_keypair();
+<a href=#830 id=830 data-nosnippet>830</a>
+<a href=#831 id=831 data-nosnippet>831</a>        <span class="kw">let </span>signature = secp256r1_sign_sha3_256(kp.private_key.clone(), message.clone()).unwrap();
+<a href=#832 id=832 data-nosnippet>832</a>        <span class="macro">assert_eq!</span>(signature.len(), SECP256R1_SIGNATURE_LENTH);
+<a href=#833 id=833 data-nosnippet>833</a>        <span class="macro">assert!</span>(secp256r1_verify_sha3_256(
+<a href=#834 id=834 data-nosnippet>834</a>            kp.public_key.clone(),
+<a href=#835 id=835 data-nosnippet>835</a>            message.clone(),
+<a href=#836 id=836 data-nosnippet>836</a>            signature.clone(),
+<a href=#837 id=837 data-nosnippet>837</a>        )
+<a href=#838 id=838 data-nosnippet>838</a>        .unwrap());
+<a href=#839 id=839 data-nosnippet>839</a>        <span class="macro">assert!</span>(!secp256r1_verify(kp.public_key, message, signature).unwrap());
+<a href=#840 id=840 data-nosnippet>840</a>    }
+<a href=#841 id=841 data-nosnippet>841</a>
+<a href=#842 id=842 data-nosnippet>842</a>    <span class="attr">#[test]
+<a href=#843 id=843 data-nosnippet>843</a>    </span><span class="kw">fn </span>secp256r1_public_key_normalization_accepts_both_sec1_forms() {
+<a href=#844 id=844 data-nosnippet>844</a>        <span class="kw">let </span>kp = secp256r1_generate_keypair();
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="kw">let </span>uncompressed = secp256r1_normalize_public_key(kp.public_key.clone(), <span class="bool-val">false</span>).unwrap();
+<a href=#846 id=846 data-nosnippet>846</a>        <span class="macro">assert_eq!</span>(uncompressed.len(), <span class="number">65</span>);
+<a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">let </span>compressed = secp256r1_normalize_public_key(uncompressed, <span class="bool-val">true</span>).unwrap();
+<a href=#848 id=848 data-nosnippet>848</a>        <span class="macro">assert_eq!</span>(compressed, kp.public_key);
+<a href=#849 id=849 data-nosnippet>849</a>    }
+<a href=#850 id=850 data-nosnippet>850</a>
+<a href=#851 id=851 data-nosnippet>851</a>    <span class="attr">#[test]
+<a href=#852 id=852 data-nosnippet>852</a>    </span><span class="kw">fn </span>mnemonic_generation_and_validation() {
+<a href=#853 id=853 data-nosnippet>853</a>        <span class="kw">for </span><span class="kw-2">&amp;</span>count <span class="kw">in </span><span class="kw-2">&amp;</span>[<span class="number">12u32</span>, <span class="number">15</span>, <span class="number">18</span>, <span class="number">21</span>, <span class="number">24</span>] {
+<a href=#854 id=854 data-nosnippet>854</a>            <span class="kw">let </span>phrase = mnemonic_generate(count).unwrap();
+<a href=#855 id=855 data-nosnippet>855</a>            <span class="macro">assert!</span>(mnemonic_validate(phrase));
+<a href=#856 id=856 data-nosnippet>856</a>        }
+<a href=#857 id=857 data-nosnippet>857</a>
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="macro">assert!</span>(mnemonic_generate(<span class="number">11</span>).is_err());
+<a href=#859 id=859 data-nosnippet>859</a>        <span class="macro">assert!</span>(mnemonic_generate(<span class="number">13</span>).is_err());
+<a href=#860 id=860 data-nosnippet>860</a>        <span class="macro">assert!</span>(!mnemonic_validate(<span class="string">"not a valid mnemonic"</span>.to_string()));
+<a href=#861 id=861 data-nosnippet>861</a>    }
+<a href=#862 id=862 data-nosnippet>862</a>
+<a href=#863 id=863 data-nosnippet>863</a>    <span class="attr">#[test]
+<a href=#864 id=864 data-nosnippet>864</a>    </span><span class="kw">fn </span>mnemonic_seed_length() {
+<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw">let </span>seed = mnemonic_to_seed(TEST_MNEMONIC.to_string(), <span class="string">""</span>.to_string()).unwrap();
+<a href=#866 id=866 data-nosnippet>866</a>        <span class="macro">assert_eq!</span>(seed.len(), <span class="number">64</span>);
+<a href=#867 id=867 data-nosnippet>867</a>    }
+<a href=#868 id=868 data-nosnippet>868</a>
+<a href=#869 id=869 data-nosnippet>869</a>    <span class="attr">#[test]
+<a href=#870 id=870 data-nosnippet>870</a>    </span><span class="kw">fn </span>mnemonic_derive_keys_all_schemes() {
+<a href=#871 id=871 data-nosnippet>871</a>        <span class="kw">let </span>path = <span class="string">"m/44'/784'/0'/0'/0'"</span>.to_string();
+<a href=#872 id=872 data-nosnippet>872</a>
+<a href=#873 id=873 data-nosnippet>873</a>        <span class="kw">let </span>ed_priv = mnemonic_derive_private_key(
 <a href=#874 id=874 data-nosnippet>874</a>            TEST_MNEMONIC.to_string(),
 <a href=#875 id=875 data-nosnippet>875</a>            <span class="string">""</span>.to_string(),
 <a href=#876 id=876 data-nosnippet>876</a>            SignatureScheme::Ed25519,
-<a href=#877 id=877 data-nosnippet>877</a>            <span class="string">"m/44'/784'/0'/0/0"</span>.to_string(),
-<a href=#878 id=878 data-nosnippet>878</a>        );
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="macro">assert!</span>(result.is_err());
-<a href=#880 id=880 data-nosnippet>880</a>    }
-<a href=#881 id=881 data-nosnippet>881</a>
-<a href=#882 id=882 data-nosnippet>882</a>    <span class="attr">#[test]
-<a href=#883 id=883 data-nosnippet>883</a>    </span><span class="kw">fn </span>mnemonic_keypair_matches_public_key() {
-<a href=#884 id=884 data-nosnippet>884</a>        <span class="kw">let </span>path = <span class="string">"m/44'/784'/0'/0'/0'"</span>.to_string();
-<a href=#885 id=885 data-nosnippet>885</a>        <span class="kw">let </span>keypair = mnemonic_derive_keypair(
-<a href=#886 id=886 data-nosnippet>886</a>            TEST_MNEMONIC.to_string(),
-<a href=#887 id=887 data-nosnippet>887</a>            <span class="string">""</span>.to_string(),
-<a href=#888 id=888 data-nosnippet>888</a>            SignatureScheme::Ed25519,
-<a href=#889 id=889 data-nosnippet>889</a>            path,
-<a href=#890 id=890 data-nosnippet>890</a>        )
-<a href=#891 id=891 data-nosnippet>891</a>        .unwrap();
-<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw">let </span>derived_pub = ed25519_public_key_from_private(keypair.private_key.clone()).unwrap();
-<a href=#893 id=893 data-nosnippet>893</a>        <span class="macro">assert_eq!</span>(derived_pub, keypair.public_key);
-<a href=#894 id=894 data-nosnippet>894</a>    }
-<a href=#895 id=895 data-nosnippet>895</a>}
-<a href=#896 id=896 data-nosnippet>896</a>
-<a href=#897 id=897 data-nosnippet>897</a><span class="attr">#[uniffi::export]
-<a href=#898 id=898 data-nosnippet>898</a></span><span class="kw">pub fn </span>secp256r1_verify(
-<a href=#899 id=899 data-nosnippet>899</a>    public_key: Vec&lt;u8&gt;,
-<a href=#900 id=900 data-nosnippet>900</a>    message: Vec&lt;u8&gt;,
-<a href=#901 id=901 data-nosnippet>901</a>    signature: Vec&lt;u8&gt;,
-<a href=#902 id=902 data-nosnippet>902</a>) -&gt; <span class="prelude-ty">Result</span>&lt;bool, FastCryptoFfiError&gt; {
-<a href=#903 id=903 data-nosnippet>903</a>    ensure_len(signature.len(), SECP256R1_SIGNATURE_LENTH)<span class="question-mark">?</span>;
-<a href=#904 id=904 data-nosnippet>904</a>    <span class="kw">let </span>normalized_public_key = normalize_secp256r1_public_key(<span class="kw-2">&amp;</span>public_key, <span class="bool-val">true</span>)<span class="question-mark">?</span>;
-<a href=#905 id=905 data-nosnippet>905</a>    <span class="kw">let </span>pk = Secp256r1PublicKey::from_bytes(<span class="kw-2">&amp;</span>normalized_public_key)<span class="question-mark">?</span>;
-<a href=#906 id=906 data-nosnippet>906</a>    <span class="kw">let </span>sig = Secp256r1Signature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
-<a href=#907 id=907 data-nosnippet>907</a>    <span class="prelude-val">Ok</span>(pk.verify(<span class="kw-2">&amp;</span>message, <span class="kw-2">&amp;</span>sig).is_ok())
-<a href=#908 id=908 data-nosnippet>908</a>}
-<a href=#909 id=909 data-nosnippet>909</a>
-<a href=#910 id=910 data-nosnippet>910</a><span class="doccomment">/// Verifies an Aptos-style P-256 signature using SHA3-256 over the exact message bytes.
-<a href=#911 id=911 data-nosnippet>911</a></span><span class="attr">#[uniffi::export]
-<a href=#912 id=912 data-nosnippet>912</a></span><span class="kw">pub fn </span>secp256r1_verify_sha3_256(
-<a href=#913 id=913 data-nosnippet>913</a>    public_key: Vec&lt;u8&gt;,
-<a href=#914 id=914 data-nosnippet>914</a>    message: Vec&lt;u8&gt;,
-<a href=#915 id=915 data-nosnippet>915</a>    signature: Vec&lt;u8&gt;,
-<a href=#916 id=916 data-nosnippet>916</a>) -&gt; <span class="prelude-ty">Result</span>&lt;bool, FastCryptoFfiError&gt; {
-<a href=#917 id=917 data-nosnippet>917</a>    ensure_len(signature.len(), SECP256R1_SIGNATURE_LENTH)<span class="question-mark">?</span>;
-<a href=#918 id=918 data-nosnippet>918</a>    <span class="kw">let </span>normalized_public_key = normalize_secp256r1_public_key(<span class="kw-2">&amp;</span>public_key, <span class="bool-val">true</span>)<span class="question-mark">?</span>;
-<a href=#919 id=919 data-nosnippet>919</a>    <span class="kw">let </span>pk = Secp256r1PublicKey::from_bytes(<span class="kw-2">&amp;</span>normalized_public_key)<span class="question-mark">?</span>;
-<a href=#920 id=920 data-nosnippet>920</a>    <span class="kw">let </span>sig = Secp256r1Signature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
-<a href=#921 id=921 data-nosnippet>921</a>    <span class="prelude-val">Ok</span>(pk.verify_with_hash::&lt;Sha3_256&gt;(<span class="kw-2">&amp;</span>message, <span class="kw-2">&amp;</span>sig).is_ok())
-<a href=#922 id=922 data-nosnippet>922</a>}
-<a href=#923 id=923 data-nosnippet>923</a>
-<a href=#924 id=924 data-nosnippet>924</a><span class="attr">#[uniffi::export]
-<a href=#925 id=925 data-nosnippet>925</a></span><span class="kw">pub fn </span>secp256r1_sign_recoverable(
-<a href=#926 id=926 data-nosnippet>926</a>    private_key: Vec&lt;u8&gt;,
-<a href=#927 id=927 data-nosnippet>927</a>    message: Vec&lt;u8&gt;,
-<a href=#928 id=928 data-nosnippet>928</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#929 id=929 data-nosnippet>929</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
-<a href=#930 id=930 data-nosnippet>930</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
-<a href=#931 id=931 data-nosnippet>931</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
-<a href=#932 id=932 data-nosnippet>932</a>    <span class="kw">let </span>sig = kp.sign_recoverable(<span class="kw-2">&amp;</span>message);
-<a href=#933 id=933 data-nosnippet>933</a>    private_key.zeroize();
-<a href=#934 id=934 data-nosnippet>934</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
-<a href=#935 id=935 data-nosnippet>935</a>}
-<a href=#936 id=936 data-nosnippet>936</a>
-<a href=#937 id=937 data-nosnippet>937</a><span class="attr">#[uniffi::export]
-<a href=#938 id=938 data-nosnippet>938</a></span><span class="kw">pub fn </span>secp256r1_recover_public_key(
-<a href=#939 id=939 data-nosnippet>939</a>    message: Vec&lt;u8&gt;,
-<a href=#940 id=940 data-nosnippet>940</a>    signature: Vec&lt;u8&gt;,
-<a href=#941 id=941 data-nosnippet>941</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#942 id=942 data-nosnippet>942</a>    ensure_len(signature.len(), SECP256R1_RECOVERABLE_SIGNATURE_LENGTH)<span class="question-mark">?</span>;
-<a href=#943 id=943 data-nosnippet>943</a>    <span class="kw">let </span>sig = Secp256r1RecoverableSignature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
-<a href=#944 id=944 data-nosnippet>944</a>    <span class="kw">let </span>pk = sig.recover(<span class="kw-2">&amp;</span>message)<span class="question-mark">?</span>;
-<a href=#945 id=945 data-nosnippet>945</a>    <span class="prelude-val">Ok</span>(pk.as_ref().to_vec())
-<a href=#946 id=946 data-nosnippet>946</a>}
-<a href=#947 id=947 data-nosnippet>947</a>
-<a href=#948 id=948 data-nosnippet>948</a><span class="attr">#[uniffi::export]
-<a href=#949 id=949 data-nosnippet>949</a></span><span class="kw">pub fn </span>sha256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#950 id=950 data-nosnippet>950</a>    Sha256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
-<a href=#951 id=951 data-nosnippet>951</a>}
-<a href=#952 id=952 data-nosnippet>952</a>
-<a href=#953 id=953 data-nosnippet>953</a><span class="attr">#[uniffi::export]
-<a href=#954 id=954 data-nosnippet>954</a></span><span class="kw">pub fn </span>sha3_256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#955 id=955 data-nosnippet>955</a>    Sha3_256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
-<a href=#956 id=956 data-nosnippet>956</a>}
-<a href=#957 id=957 data-nosnippet>957</a>
-<a href=#958 id=958 data-nosnippet>958</a><span class="doccomment">/// Returns bytes from the platform cryptographically secure random generator.
-<a href=#959 id=959 data-nosnippet>959</a></span><span class="attr">#[uniffi::export]
-<a href=#960 id=960 data-nosnippet>960</a></span><span class="kw">pub fn </span>secure_random_bytes(length: u32) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#961 id=961 data-nosnippet>961</a>    <span class="kw">const </span>MAX_RANDOM_BYTES: u32 = <span class="number">1024 </span>* <span class="number">1024</span>;
-<a href=#962 id=962 data-nosnippet>962</a>    <span class="kw">if </span>length &gt; MAX_RANDOM_BYTES {
-<a href=#963 id=963 data-nosnippet>963</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(FastCryptoFfiError::InputTooLong(MAX_RANDOM_BYTES <span class="kw">as </span>u64));
-<a href=#964 id=964 data-nosnippet>964</a>    }
-<a href=#965 id=965 data-nosnippet>965</a>    <span class="kw">let </span><span class="kw-2">mut </span>output = <span class="macro">vec!</span>[<span class="number">0u8</span>; length <span class="kw">as </span>usize];
-<a href=#966 id=966 data-nosnippet>966</a>    thread_rng().fill_bytes(<span class="kw-2">&amp;mut </span>output);
-<a href=#967 id=967 data-nosnippet>967</a>    <span class="prelude-val">Ok</span>(output)
-<a href=#968 id=968 data-nosnippet>968</a>}
-<a href=#969 id=969 data-nosnippet>969</a>
-<a href=#970 id=970 data-nosnippet>970</a><span class="attr">#[uniffi::export]
-<a href=#971 id=971 data-nosnippet>971</a></span><span class="kw">pub fn </span>sha512(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#972 id=972 data-nosnippet>972</a>    Sha512::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
-<a href=#973 id=973 data-nosnippet>973</a>}
-<a href=#974 id=974 data-nosnippet>974</a>
-<a href=#975 id=975 data-nosnippet>975</a><span class="attr">#[uniffi::export]
-<a href=#976 id=976 data-nosnippet>976</a></span><span class="kw">pub fn </span>sha3_512(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#977 id=977 data-nosnippet>977</a>    Sha3_512::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
-<a href=#978 id=978 data-nosnippet>978</a>}
-<a href=#979 id=979 data-nosnippet>979</a>
-<a href=#980 id=980 data-nosnippet>980</a><span class="attr">#[uniffi::export]
-<a href=#981 id=981 data-nosnippet>981</a></span><span class="kw">pub fn </span>keccak256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#982 id=982 data-nosnippet>982</a>    Keccak256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
-<a href=#983 id=983 data-nosnippet>983</a>}
-<a href=#984 id=984 data-nosnippet>984</a>
-<a href=#985 id=985 data-nosnippet>985</a><span class="attr">#[uniffi::export]
-<a href=#986 id=986 data-nosnippet>986</a></span><span class="kw">pub fn </span>blake2b256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
-<a href=#987 id=987 data-nosnippet>987</a>    Blake2b256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
-<a href=#988 id=988 data-nosnippet>988</a>}
-<a href=#989 id=989 data-nosnippet>989</a>
-<a href=#990 id=990 data-nosnippet>990</a><span class="attr">#[uniffi::export]
-<a href=#991 id=991 data-nosnippet>991</a></span><span class="kw">pub fn </span>hmac_sha3_256_digest(key: Vec&lt;u8&gt;, message: Vec&lt;u8&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#992 id=992 data-nosnippet>992</a>    <span class="kw">let </span>key = HmacKey::from_bytes(<span class="kw-2">&amp;</span>key)<span class="question-mark">?</span>;
-<a href=#993 id=993 data-nosnippet>993</a>    <span class="prelude-val">Ok</span>(hmac_sha3_256(<span class="kw-2">&amp;</span>key, <span class="kw-2">&amp;</span>message).digest.to_vec())
-<a href=#994 id=994 data-nosnippet>994</a>}
-<a href=#995 id=995 data-nosnippet>995</a>
-<a href=#996 id=996 data-nosnippet>996</a><span class="attr">#[uniffi::export]
-<a href=#997 id=997 data-nosnippet>997</a></span><span class="kw">pub fn </span>hkdf_sha3_256_expand(
-<a href=#998 id=998 data-nosnippet>998</a>    ikm: Vec&lt;u8&gt;,
-<a href=#999 id=999 data-nosnippet>999</a>    salt: Vec&lt;u8&gt;,
-<a href=#1000 id=1000 data-nosnippet>1000</a>    info: Vec&lt;u8&gt;,
-<a href=#1001 id=1001 data-nosnippet>1001</a>    output_length: u32,
-<a href=#1002 id=1002 data-nosnippet>1002</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
-<a href=#1003 id=1003 data-nosnippet>1003</a>    <span class="kw">let </span>ikm = HkdfIkm::from_bytes(<span class="kw-2">&amp;</span>ikm)<span class="question-mark">?</span>;
-<a href=#1004 id=1004 data-nosnippet>1004</a>    <span class="prelude-val">Ok</span>(hkdf_sha3_256(<span class="kw-2">&amp;</span>ikm, <span class="kw-2">&amp;</span>salt, <span class="kw-2">&amp;</span>info, output_length <span class="kw">as </span>usize)<span class="question-mark">?</span>)
+<a href=#877 id=877 data-nosnippet>877</a>            path.clone(),
+<a href=#878 id=878 data-nosnippet>878</a>        )
+<a href=#879 id=879 data-nosnippet>879</a>        .unwrap();
+<a href=#880 id=880 data-nosnippet>880</a>        <span class="macro">assert_eq!</span>(ed_priv.len(), ED25519_PRIVATE_KEY_LENGTH);
+<a href=#881 id=881 data-nosnippet>881</a>        <span class="kw">let </span>ed_pub = mnemonic_derive_public_key(
+<a href=#882 id=882 data-nosnippet>882</a>            TEST_MNEMONIC.to_string(),
+<a href=#883 id=883 data-nosnippet>883</a>            <span class="string">""</span>.to_string(),
+<a href=#884 id=884 data-nosnippet>884</a>            SignatureScheme::Ed25519,
+<a href=#885 id=885 data-nosnippet>885</a>            path.clone(),
+<a href=#886 id=886 data-nosnippet>886</a>        )
+<a href=#887 id=887 data-nosnippet>887</a>        .unwrap();
+<a href=#888 id=888 data-nosnippet>888</a>        <span class="macro">assert_eq!</span>(ed_pub.len(), ED25519_PUBLIC_KEY_LENGTH);
+<a href=#889 id=889 data-nosnippet>889</a>
+<a href=#890 id=890 data-nosnippet>890</a>        <span class="kw">let </span>k1_priv = mnemonic_derive_private_key(
+<a href=#891 id=891 data-nosnippet>891</a>            TEST_MNEMONIC.to_string(),
+<a href=#892 id=892 data-nosnippet>892</a>            <span class="string">""</span>.to_string(),
+<a href=#893 id=893 data-nosnippet>893</a>            SignatureScheme::Secp256k1,
+<a href=#894 id=894 data-nosnippet>894</a>            <span class="string">"m/44'/0'/0'/0/0"</span>.to_string(),
+<a href=#895 id=895 data-nosnippet>895</a>        )
+<a href=#896 id=896 data-nosnippet>896</a>        .unwrap();
+<a href=#897 id=897 data-nosnippet>897</a>        <span class="macro">assert_eq!</span>(k1_priv.len(), SECP256K1_PRIVATE_KEY_LENGTH);
+<a href=#898 id=898 data-nosnippet>898</a>        <span class="kw">let </span>k1_pub = mnemonic_derive_public_key(
+<a href=#899 id=899 data-nosnippet>899</a>            TEST_MNEMONIC.to_string(),
+<a href=#900 id=900 data-nosnippet>900</a>            <span class="string">""</span>.to_string(),
+<a href=#901 id=901 data-nosnippet>901</a>            SignatureScheme::Secp256k1,
+<a href=#902 id=902 data-nosnippet>902</a>            <span class="string">"m/44'/0'/0'/0/0"</span>.to_string(),
+<a href=#903 id=903 data-nosnippet>903</a>        )
+<a href=#904 id=904 data-nosnippet>904</a>        .unwrap();
+<a href=#905 id=905 data-nosnippet>905</a>        <span class="macro">assert_eq!</span>(k1_pub.len(), SECP256K1_PUBLIC_KEY_LENGTH);
+<a href=#906 id=906 data-nosnippet>906</a>
+<a href=#907 id=907 data-nosnippet>907</a>        <span class="kw">let </span>r1_priv = mnemonic_derive_private_key(
+<a href=#908 id=908 data-nosnippet>908</a>            TEST_MNEMONIC.to_string(),
+<a href=#909 id=909 data-nosnippet>909</a>            <span class="string">""</span>.to_string(),
+<a href=#910 id=910 data-nosnippet>910</a>            SignatureScheme::Secp256r1,
+<a href=#911 id=911 data-nosnippet>911</a>            <span class="string">"m/44'/0'/0'/0/1"</span>.to_string(),
+<a href=#912 id=912 data-nosnippet>912</a>        )
+<a href=#913 id=913 data-nosnippet>913</a>        .unwrap();
+<a href=#914 id=914 data-nosnippet>914</a>        <span class="macro">assert_eq!</span>(r1_priv.len(), SECP256R1_PRIVATE_KEY_LENGTH);
+<a href=#915 id=915 data-nosnippet>915</a>        <span class="kw">let </span>r1_pub = mnemonic_derive_public_key(
+<a href=#916 id=916 data-nosnippet>916</a>            TEST_MNEMONIC.to_string(),
+<a href=#917 id=917 data-nosnippet>917</a>            <span class="string">""</span>.to_string(),
+<a href=#918 id=918 data-nosnippet>918</a>            SignatureScheme::Secp256r1,
+<a href=#919 id=919 data-nosnippet>919</a>            <span class="string">"m/44'/0'/0'/0/1"</span>.to_string(),
+<a href=#920 id=920 data-nosnippet>920</a>        )
+<a href=#921 id=921 data-nosnippet>921</a>        .unwrap();
+<a href=#922 id=922 data-nosnippet>922</a>        <span class="macro">assert_eq!</span>(r1_pub.len(), SECP256R1_PUBLIC_KEY_LENGTH);
+<a href=#923 id=923 data-nosnippet>923</a>    }
+<a href=#924 id=924 data-nosnippet>924</a>
+<a href=#925 id=925 data-nosnippet>925</a>    <span class="attr">#[test]
+<a href=#926 id=926 data-nosnippet>926</a>    </span><span class="kw">fn </span>ed25519_rejects_non_hardened_path() {
+<a href=#927 id=927 data-nosnippet>927</a>        <span class="kw">let </span>result = mnemonic_derive_private_key(
+<a href=#928 id=928 data-nosnippet>928</a>            TEST_MNEMONIC.to_string(),
+<a href=#929 id=929 data-nosnippet>929</a>            <span class="string">""</span>.to_string(),
+<a href=#930 id=930 data-nosnippet>930</a>            SignatureScheme::Ed25519,
+<a href=#931 id=931 data-nosnippet>931</a>            <span class="string">"m/44'/784'/0'/0/0"</span>.to_string(),
+<a href=#932 id=932 data-nosnippet>932</a>        );
+<a href=#933 id=933 data-nosnippet>933</a>        <span class="macro">assert!</span>(result.is_err());
+<a href=#934 id=934 data-nosnippet>934</a>    }
+<a href=#935 id=935 data-nosnippet>935</a>
+<a href=#936 id=936 data-nosnippet>936</a>    <span class="attr">#[test]
+<a href=#937 id=937 data-nosnippet>937</a>    </span><span class="kw">fn </span>mnemonic_keypair_matches_public_key() {
+<a href=#938 id=938 data-nosnippet>938</a>        <span class="kw">let </span>path = <span class="string">"m/44'/784'/0'/0'/0'"</span>.to_string();
+<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>keypair = mnemonic_derive_keypair(
+<a href=#940 id=940 data-nosnippet>940</a>            TEST_MNEMONIC.to_string(),
+<a href=#941 id=941 data-nosnippet>941</a>            <span class="string">""</span>.to_string(),
+<a href=#942 id=942 data-nosnippet>942</a>            SignatureScheme::Ed25519,
+<a href=#943 id=943 data-nosnippet>943</a>            path,
+<a href=#944 id=944 data-nosnippet>944</a>        )
+<a href=#945 id=945 data-nosnippet>945</a>        .unwrap();
+<a href=#946 id=946 data-nosnippet>946</a>        <span class="kw">let </span>derived_pub = ed25519_public_key_from_private(keypair.private_key.clone()).unwrap();
+<a href=#947 id=947 data-nosnippet>947</a>        <span class="macro">assert_eq!</span>(derived_pub, keypair.public_key);
+<a href=#948 id=948 data-nosnippet>948</a>    }
+<a href=#949 id=949 data-nosnippet>949</a>}
+<a href=#950 id=950 data-nosnippet>950</a>
+<a href=#951 id=951 data-nosnippet>951</a><span class="attr">#[uniffi::export]
+<a href=#952 id=952 data-nosnippet>952</a></span><span class="kw">pub fn </span>secp256r1_verify(
+<a href=#953 id=953 data-nosnippet>953</a>    public_key: Vec&lt;u8&gt;,
+<a href=#954 id=954 data-nosnippet>954</a>    message: Vec&lt;u8&gt;,
+<a href=#955 id=955 data-nosnippet>955</a>    signature: Vec&lt;u8&gt;,
+<a href=#956 id=956 data-nosnippet>956</a>) -&gt; <span class="prelude-ty">Result</span>&lt;bool, FastCryptoFfiError&gt; {
+<a href=#957 id=957 data-nosnippet>957</a>    ensure_len(signature.len(), SECP256R1_SIGNATURE_LENTH)<span class="question-mark">?</span>;
+<a href=#958 id=958 data-nosnippet>958</a>    <span class="kw">let </span>normalized_public_key = normalize_secp256r1_public_key(<span class="kw-2">&amp;</span>public_key, <span class="bool-val">true</span>)<span class="question-mark">?</span>;
+<a href=#959 id=959 data-nosnippet>959</a>    <span class="kw">let </span>pk = Secp256r1PublicKey::from_bytes(<span class="kw-2">&amp;</span>normalized_public_key)<span class="question-mark">?</span>;
+<a href=#960 id=960 data-nosnippet>960</a>    <span class="kw">let </span>sig = Secp256r1Signature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
+<a href=#961 id=961 data-nosnippet>961</a>    <span class="prelude-val">Ok</span>(pk.verify(<span class="kw-2">&amp;</span>message, <span class="kw-2">&amp;</span>sig).is_ok())
+<a href=#962 id=962 data-nosnippet>962</a>}
+<a href=#963 id=963 data-nosnippet>963</a>
+<a href=#964 id=964 data-nosnippet>964</a><span class="doccomment">/// Verifies an Aptos-style P-256 signature using SHA3-256 over the exact message bytes.
+<a href=#965 id=965 data-nosnippet>965</a></span><span class="attr">#[uniffi::export]
+<a href=#966 id=966 data-nosnippet>966</a></span><span class="kw">pub fn </span>secp256r1_verify_sha3_256(
+<a href=#967 id=967 data-nosnippet>967</a>    public_key: Vec&lt;u8&gt;,
+<a href=#968 id=968 data-nosnippet>968</a>    message: Vec&lt;u8&gt;,
+<a href=#969 id=969 data-nosnippet>969</a>    signature: Vec&lt;u8&gt;,
+<a href=#970 id=970 data-nosnippet>970</a>) -&gt; <span class="prelude-ty">Result</span>&lt;bool, FastCryptoFfiError&gt; {
+<a href=#971 id=971 data-nosnippet>971</a>    ensure_len(signature.len(), SECP256R1_SIGNATURE_LENTH)<span class="question-mark">?</span>;
+<a href=#972 id=972 data-nosnippet>972</a>    <span class="kw">let </span>normalized_public_key = normalize_secp256r1_public_key(<span class="kw-2">&amp;</span>public_key, <span class="bool-val">true</span>)<span class="question-mark">?</span>;
+<a href=#973 id=973 data-nosnippet>973</a>    <span class="kw">let </span>pk = Secp256r1PublicKey::from_bytes(<span class="kw-2">&amp;</span>normalized_public_key)<span class="question-mark">?</span>;
+<a href=#974 id=974 data-nosnippet>974</a>    <span class="kw">let </span>sig = Secp256r1Signature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
+<a href=#975 id=975 data-nosnippet>975</a>    <span class="prelude-val">Ok</span>(pk.verify_with_hash::&lt;Sha3_256&gt;(<span class="kw-2">&amp;</span>message, <span class="kw-2">&amp;</span>sig).is_ok())
+<a href=#976 id=976 data-nosnippet>976</a>}
+<a href=#977 id=977 data-nosnippet>977</a>
+<a href=#978 id=978 data-nosnippet>978</a><span class="attr">#[uniffi::export]
+<a href=#979 id=979 data-nosnippet>979</a></span><span class="kw">pub fn </span>secp256r1_sign_recoverable(
+<a href=#980 id=980 data-nosnippet>980</a>    private_key: Vec&lt;u8&gt;,
+<a href=#981 id=981 data-nosnippet>981</a>    message: Vec&lt;u8&gt;,
+<a href=#982 id=982 data-nosnippet>982</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#983 id=983 data-nosnippet>983</a>    ensure_len(private_key.len(), SECP256R1_PRIVATE_KEY_LENGTH)<span class="question-mark">?</span>;
+<a href=#984 id=984 data-nosnippet>984</a>    <span class="kw">let </span><span class="kw-2">mut </span>private_key = private_key;
+<a href=#985 id=985 data-nosnippet>985</a>    <span class="kw">let </span>kp = Secp256r1KeyPair::from_bytes(<span class="kw-2">&amp;</span>private_key)<span class="question-mark">?</span>;
+<a href=#986 id=986 data-nosnippet>986</a>    <span class="kw">let </span>sig = kp.sign_recoverable(<span class="kw-2">&amp;</span>message);
+<a href=#987 id=987 data-nosnippet>987</a>    private_key.zeroize();
+<a href=#988 id=988 data-nosnippet>988</a>    <span class="prelude-val">Ok</span>(sig.as_ref().to_vec())
+<a href=#989 id=989 data-nosnippet>989</a>}
+<a href=#990 id=990 data-nosnippet>990</a>
+<a href=#991 id=991 data-nosnippet>991</a><span class="attr">#[uniffi::export]
+<a href=#992 id=992 data-nosnippet>992</a></span><span class="kw">pub fn </span>secp256r1_recover_public_key(
+<a href=#993 id=993 data-nosnippet>993</a>    message: Vec&lt;u8&gt;,
+<a href=#994 id=994 data-nosnippet>994</a>    signature: Vec&lt;u8&gt;,
+<a href=#995 id=995 data-nosnippet>995</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#996 id=996 data-nosnippet>996</a>    ensure_len(signature.len(), SECP256R1_RECOVERABLE_SIGNATURE_LENGTH)<span class="question-mark">?</span>;
+<a href=#997 id=997 data-nosnippet>997</a>    <span class="kw">let </span>sig = Secp256r1RecoverableSignature::from_bytes(<span class="kw-2">&amp;</span>signature)<span class="question-mark">?</span>;
+<a href=#998 id=998 data-nosnippet>998</a>    <span class="kw">let </span>pk = sig.recover(<span class="kw-2">&amp;</span>message)<span class="question-mark">?</span>;
+<a href=#999 id=999 data-nosnippet>999</a>    <span class="prelude-val">Ok</span>(pk.as_ref().to_vec())
+<a href=#1000 id=1000 data-nosnippet>1000</a>}
+<a href=#1001 id=1001 data-nosnippet>1001</a>
+<a href=#1002 id=1002 data-nosnippet>1002</a><span class="attr">#[uniffi::export]
+<a href=#1003 id=1003 data-nosnippet>1003</a></span><span class="kw">pub fn </span>sha256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#1004 id=1004 data-nosnippet>1004</a>    Sha256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
 <a href=#1005 id=1005 data-nosnippet>1005</a>}
-<a href=#1006 id=1006 data-nosnippet>1006</a><span class="kw">mod </span>seal;
+<a href=#1006 id=1006 data-nosnippet>1006</a>
+<a href=#1007 id=1007 data-nosnippet>1007</a><span class="attr">#[uniffi::export]
+<a href=#1008 id=1008 data-nosnippet>1008</a></span><span class="kw">pub fn </span>sha3_256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#1009 id=1009 data-nosnippet>1009</a>    Sha3_256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
+<a href=#1010 id=1010 data-nosnippet>1010</a>}
+<a href=#1011 id=1011 data-nosnippet>1011</a>
+<a href=#1012 id=1012 data-nosnippet>1012</a><span class="doccomment">/// Returns bytes from the platform cryptographically secure random generator.
+<a href=#1013 id=1013 data-nosnippet>1013</a></span><span class="attr">#[uniffi::export]
+<a href=#1014 id=1014 data-nosnippet>1014</a></span><span class="kw">pub fn </span>secure_random_bytes(length: u32) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#1015 id=1015 data-nosnippet>1015</a>    <span class="kw">const </span>MAX_RANDOM_BYTES: u32 = <span class="number">1024 </span>* <span class="number">1024</span>;
+<a href=#1016 id=1016 data-nosnippet>1016</a>    <span class="kw">if </span>length &gt; MAX_RANDOM_BYTES {
+<a href=#1017 id=1017 data-nosnippet>1017</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(FastCryptoFfiError::InputTooLong(MAX_RANDOM_BYTES <span class="kw">as </span>u64));
+<a href=#1018 id=1018 data-nosnippet>1018</a>    }
+<a href=#1019 id=1019 data-nosnippet>1019</a>    <span class="kw">let </span><span class="kw-2">mut </span>output = <span class="macro">vec!</span>[<span class="number">0u8</span>; length <span class="kw">as </span>usize];
+<a href=#1020 id=1020 data-nosnippet>1020</a>    thread_rng().fill_bytes(<span class="kw-2">&amp;mut </span>output);
+<a href=#1021 id=1021 data-nosnippet>1021</a>    <span class="prelude-val">Ok</span>(output)
+<a href=#1022 id=1022 data-nosnippet>1022</a>}
+<a href=#1023 id=1023 data-nosnippet>1023</a>
+<a href=#1024 id=1024 data-nosnippet>1024</a><span class="attr">#[uniffi::export]
+<a href=#1025 id=1025 data-nosnippet>1025</a></span><span class="kw">pub fn </span>sha512(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#1026 id=1026 data-nosnippet>1026</a>    Sha512::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
+<a href=#1027 id=1027 data-nosnippet>1027</a>}
+<a href=#1028 id=1028 data-nosnippet>1028</a>
+<a href=#1029 id=1029 data-nosnippet>1029</a><span class="attr">#[uniffi::export]
+<a href=#1030 id=1030 data-nosnippet>1030</a></span><span class="kw">pub fn </span>sha3_512(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#1031 id=1031 data-nosnippet>1031</a>    Sha3_512::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
+<a href=#1032 id=1032 data-nosnippet>1032</a>}
+<a href=#1033 id=1033 data-nosnippet>1033</a>
+<a href=#1034 id=1034 data-nosnippet>1034</a><span class="attr">#[uniffi::export]
+<a href=#1035 id=1035 data-nosnippet>1035</a></span><span class="kw">pub fn </span>keccak256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#1036 id=1036 data-nosnippet>1036</a>    Keccak256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
+<a href=#1037 id=1037 data-nosnippet>1037</a>}
+<a href=#1038 id=1038 data-nosnippet>1038</a>
+<a href=#1039 id=1039 data-nosnippet>1039</a><span class="attr">#[uniffi::export]
+<a href=#1040 id=1040 data-nosnippet>1040</a></span><span class="kw">pub fn </span>blake2b256(message: Vec&lt;u8&gt;) -&gt; Vec&lt;u8&gt; {
+<a href=#1041 id=1041 data-nosnippet>1041</a>    Blake2b256::digest(<span class="kw-2">&amp;</span>message).digest.to_vec()
+<a href=#1042 id=1042 data-nosnippet>1042</a>}
+<a href=#1043 id=1043 data-nosnippet>1043</a>
+<a href=#1044 id=1044 data-nosnippet>1044</a><span class="attr">#[uniffi::export]
+<a href=#1045 id=1045 data-nosnippet>1045</a></span><span class="kw">pub fn </span>hmac_sha3_256_digest(key: Vec&lt;u8&gt;, message: Vec&lt;u8&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#1046 id=1046 data-nosnippet>1046</a>    <span class="kw">let </span>key = HmacKey::from_bytes(<span class="kw-2">&amp;</span>key)<span class="question-mark">?</span>;
+<a href=#1047 id=1047 data-nosnippet>1047</a>    <span class="prelude-val">Ok</span>(hmac_sha3_256(<span class="kw-2">&amp;</span>key, <span class="kw-2">&amp;</span>message).digest.to_vec())
+<a href=#1048 id=1048 data-nosnippet>1048</a>}
+<a href=#1049 id=1049 data-nosnippet>1049</a>
+<a href=#1050 id=1050 data-nosnippet>1050</a><span class="attr">#[uniffi::export]
+<a href=#1051 id=1051 data-nosnippet>1051</a></span><span class="kw">pub fn </span>hkdf_sha3_256_expand(
+<a href=#1052 id=1052 data-nosnippet>1052</a>    ikm: Vec&lt;u8&gt;,
+<a href=#1053 id=1053 data-nosnippet>1053</a>    salt: Vec&lt;u8&gt;,
+<a href=#1054 id=1054 data-nosnippet>1054</a>    info: Vec&lt;u8&gt;,
+<a href=#1055 id=1055 data-nosnippet>1055</a>    output_length: u32,
+<a href=#1056 id=1056 data-nosnippet>1056</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;, FastCryptoFfiError&gt; {
+<a href=#1057 id=1057 data-nosnippet>1057</a>    <span class="kw">let </span>ikm = HkdfIkm::from_bytes(<span class="kw-2">&amp;</span>ikm)<span class="question-mark">?</span>;
+<a href=#1058 id=1058 data-nosnippet>1058</a>    <span class="prelude-val">Ok</span>(hkdf_sha3_256(<span class="kw-2">&amp;</span>ikm, <span class="kw-2">&amp;</span>salt, <span class="kw-2">&amp;</span>info, output_length <span class="kw">as </span>usize)<span class="question-mark">?</span>)
+<a href=#1059 id=1059 data-nosnippet>1059</a>}
+<a href=#1060 id=1060 data-nosnippet>1060</a><span class="kw">mod </span>seal;
 </code></pre></div></section></main></body></html>
