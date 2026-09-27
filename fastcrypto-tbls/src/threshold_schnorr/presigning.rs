@@ -1,15 +1,20 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::threshold_schnorr::batch_avss::ReceiverOutput;
+use crate::threshold_schnorr::batch_avss_avid::ReceiverOutput;
 use crate::threshold_schnorr::pascal_matrix::LazyPascalMatrixMultiplier;
 use crate::threshold_schnorr::{Parameters, G, S};
 use crate::types::get_uniform_value;
 use fastcrypto::error::FastCryptoError::InvalidInput;
 use fastcrypto::error::FastCryptoResult;
 use itertools::Itertools;
+use tracing::warn;
 
 /// An iterator that yields presigning tuples (t_i, p_i).
+///
+/// The tuples are tied to the committee and weights they were created for, since share indices
+/// follow the cumulative weights. They must be discarded and regenerated when the committee
+/// changes.
 pub struct Presignatures {
     secret: Vec<LazyPascalMatrixMultiplier<S>>,
     public: LazyPascalMatrixMultiplier<G>,
@@ -42,12 +47,17 @@ impl Presignatures {
     /// Based on the output of a batched AVSS from multiple dealers, create a presignature
     /// generator.
     ///
+    /// The generator always starts at the first tuple and stores no position, so the caller must
+    /// keep track of which tuples have been used in state that survives restarts, and resume with
+    /// e.g. `nth`.
+    ///
     /// All parties must use the same outputs in the same order, and the output from a dealer with
-    /// weight `w` should be equal to `batch_size_per_weight * w`.
+    /// weight `w` should be equal to `batch_size_per_weight * w`. The outputs must come from
+    /// distinct dealers, with at most one output per dealer.
     ///
     /// More parties contributing outputs gives more presignatures, so include as many as possible
-    /// but at least `params.t` (by weight).
-    /// Caller should wait for at least `params.t` outputs, plus some \delta time to collect more.
+    /// but at least `params.t` (by weight). The set of outputs and their order must be agreed on
+    /// before calling this, e.g., by the order of the dealers' certificates on the TOB channel.
     ///
     /// `params.t` is the reconstruction threshold. The nonce polynomials are shared at degree
     /// `params.t - 1`, so this produces `total_weight - (params.t - 1)` presignatures per nonce
@@ -64,12 +74,25 @@ impl Presignatures {
         outputs: Vec<ReceiverOutput>,
         batch_size_per_weight: u16,
         params: Parameters,
-        use_legacy: bool,
     ) -> FastCryptoResult<Self> {
         if batch_size_per_weight == 0 {
             return Err(InvalidInput);
         }
         let batch_size_per_weight = batch_size_per_weight as usize;
+
+        // Outputs from different dealings have different public keys with overwhelming
+        // probability, so equal ones mean either the same output twice or two dealers dealing the
+        // same nonces. Neither is unsafe, but the first means the caller counted one contribution
+        // twice, which extracts more presignatures than the honest entropy justifies. Outputs
+        // without public keys add no weight and are ignored.
+        if outputs
+            .iter()
+            .filter(|o| !o.public_keys.is_empty())
+            .tuple_combinations()
+            .any(|(a, b)| a.public_keys == b.public_keys)
+        {
+            warn!("presigning: two outputs share their public keys");
+        }
 
         // Recover each dealer's weight from its public key count, which works even for a
         // zero-weight party.
@@ -87,12 +110,7 @@ impl Presignatures {
             return Err(InvalidInput);
         }
 
-        // TODO: remove legacy mode once the old protocol is deprecated.
-        let height = if use_legacy {
-            total_weight_of_outputs - params.f as usize
-        } else {
-            total_weight_of_outputs - (params.t as usize - 1)
-        };
+        let height = total_weight_of_outputs - (params.t as usize - 1);
 
         // This party's weight, aka its number of shares
         let my_weight =
@@ -155,27 +173,25 @@ impl Presignatures {
 #[cfg(test)]
 mod tests {
     use super::Presignatures;
-    use crate::threshold_schnorr::batch_avss::{ReceiverOutput, ShareBatch, SharesForNode};
+    use crate::threshold_schnorr::batch_avss_avid::{ReceiverOutput, ShareBatch, SharesForNode};
     use crate::threshold_schnorr::{Parameters, G, S};
-    use crate::types::ShareIndex;
     use fastcrypto::groups::GroupElement;
 
     #[test]
     fn test_new_with_zero_weight_party() {
         // A zero-weight party gets ReceiverOutputs with empty shares; this must not panic.
         let batch_size_per_weight: u16 = 2;
-        let params = Parameters { t: 2, f: 1 }; // total weight is 2; requires t > f
+        let params = Parameters { t: 2, f: 1 }; // total weight is 2; requires t >= f
 
         // Two weight-1 dealers: each output has batch_size_per_weight public keys, no shares.
         let outputs = (0..2)
-            .map(|_| ReceiverOutput {
+            .map(|i| ReceiverOutput {
                 my_shares: SharesForNode { shares: vec![] },
-                public_keys: vec![G::generator(); batch_size_per_weight as usize],
+                public_keys: vec![G::generator() * S::from(i + 1); batch_size_per_weight as usize],
             })
             .collect::<Vec<_>>();
 
-        let presignatures =
-            Presignatures::new(outputs, batch_size_per_weight, params, false).unwrap();
+        let presignatures = Presignatures::new(outputs, batch_size_per_weight, params).unwrap();
 
         let total_weight_of_outputs = 2;
         let expected_len =
@@ -189,37 +205,48 @@ mod tests {
 
     #[test]
     fn test_presig_count_uses_privacy_threshold_not_f() {
-        // Regression test for the SI-matrix height: in the default (non-legacy) mode it must be
-        // `total_weight - (t - 1)`, the privacy threshold of the degree-`(t-1)` nonce sharings,
-        // NOT `total_weight - f`. The two differ exactly when `t > f + 1`, so pick such a case:
-        // t = 3, f = 1 (t - 1 = 2 != f = 1). The legacy mode still uses `total_weight - f`.
+        // Regression test for the SI-matrix height: it must be `total_weight - (t - 1)`, the
+        // privacy threshold of the degree-`(t-1)` nonce sharings, NOT `total_weight - f`. The two
+        // agree only when `t - 1 == f`, so this covers both sides: t = 3, f = 1 gives fewer
+        // positions than `total_weight - f` would, and t = f gives one more.
         let batch_size_per_weight: u16 = 2;
         let params = Parameters { t: 3, f: 1 };
 
         // Four weight-1 dealers -> total weight 4. Zero-weight receiver perspective (empty shares).
         let outputs = (0..4)
-            .map(|_| ReceiverOutput {
+            .map(|i| ReceiverOutput {
                 my_shares: SharesForNode { shares: vec![] },
-                public_keys: vec![G::generator(); batch_size_per_weight as usize],
+                public_keys: vec![G::generator() * S::from(i + 1); batch_size_per_weight as usize],
             })
             .collect::<Vec<_>>();
 
-        // Default mode (privacy threshold t-1): (4 - (3 - 1)) * 2 = 4.
-        let new =
-            Presignatures::new(outputs.clone(), batch_size_per_weight, params, false).unwrap();
+        // Privacy threshold t-1: (4 - (3 - 1)) * 2 = 4.
+        let presignatures = Presignatures::new(outputs, batch_size_per_weight, params).unwrap();
         assert_eq!(
-            new.len(),
+            presignatures.len(),
             (4 - (params.t as usize - 1)) * batch_size_per_weight as usize
         );
-        assert_eq!(new.len(), 4);
+        assert_eq!(presignatures.len(), 4);
 
-        // Legacy mode (total_weight - f): (4 - 1) * 2 = 6.
-        let legacy = Presignatures::new(outputs, batch_size_per_weight, params, true).unwrap();
+        // `t == f` is allowed (`validate` rejects only `t < f`), and is the direction where
+        // `total_weight - f` under-produces instead of over-producing.
+        let params = Parameters { t: 2, f: 2 };
+        let outputs = (0..4)
+            .map(|i| ReceiverOutput {
+                my_shares: SharesForNode { shares: vec![] },
+                public_keys: vec![G::generator() * S::from(i + 1); batch_size_per_weight as usize],
+            })
+            .collect::<Vec<_>>();
+
+        // Total weight 4 and `t - 1 = 1` give a height of 3, and each row yields one presignature
+        // per nonce position, so (4 - (2 - 1)) * 2 = 6. Using `f = 2` as the threshold would leave
+        // a height of 2 and so (4 - 2) * 2 = 4.
+        let presignatures = Presignatures::new(outputs, batch_size_per_weight, params).unwrap();
         assert_eq!(
-            legacy.len(),
-            (4 - params.f as usize) * batch_size_per_weight as usize
+            presignatures.len(),
+            (4 - (params.t as usize - 1)) * batch_size_per_weight as usize
         );
-        assert_eq!(legacy.len(), 6);
+        assert_eq!(presignatures.len(), 6);
     }
 
     #[test]
@@ -228,21 +255,20 @@ mod tests {
         // batch must have batch_size_per_weight entries. A shorter batch must be rejected, not
         // panic.
         let batch_size_per_weight: u16 = 2;
-        let params = Parameters { t: 2, f: 1 }; // total weight is 2; requires t > f
+        let params = Parameters { t: 2, f: 1 }; // total weight is 2; requires t >= f
 
         let outputs = (0..2)
-            .map(|_| ReceiverOutput {
+            .map(|i| ReceiverOutput {
                 my_shares: SharesForNode {
                     shares: vec![ShareBatch {
-                        index: ShareIndex::new(1).unwrap(),
                         batch: vec![S::generator()], // length 1 < expected 2
                         blinding_share: S::generator(),
                     }],
                 },
-                public_keys: vec![G::generator(); batch_size_per_weight as usize],
+                public_keys: vec![G::generator() * S::from(i + 1); batch_size_per_weight as usize],
             })
             .collect::<Vec<_>>();
 
-        assert!(Presignatures::new(outputs, batch_size_per_weight, params, false).is_err());
+        assert!(Presignatures::new(outputs, batch_size_per_weight, params).is_err());
     }
 }

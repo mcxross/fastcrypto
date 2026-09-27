@@ -36,6 +36,13 @@ pub(crate) fn derive_verifying_key_internal(vk: &G, address: &Address) -> FastCr
 /// Derive a new verifying key from an existing one and a Sui address.
 /// This will be a valid BIP-0340 Schnorr public key.
 ///
+/// The derivation depends on the y-parity of `vk`, so it must be given the full verifying key.
+/// Lifting the x-only BIP-0340 form of `vk` to even y gives a different result for about half of
+/// all keys.
+///
+/// The derivation is non-hardened: the derived signing key is the original one plus a public
+/// tweak, so revealing a derived signing key reveals the original one.
+///
 /// Returns an error if `vk` is the identity point.
 pub fn derive_verifying_key(vk: &G, address: &Address) -> FastCryptoResult<SchnorrPublicKey> {
     Ok(

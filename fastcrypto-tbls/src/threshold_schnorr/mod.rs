@@ -9,9 +9,8 @@
 //! 1. A Distributed Key Generation (DKG) protocol to generate a shared signing key without a
 //!    trusted dealer. The protocol also allows resharing of a share from a previous DKG, allowing
 //!    for key rotation. This is implemented in the [avss] module.
-//! 2. A protocol to generate a batch of secret shared nonces for signing. The AVID-based
-//!    implementation used by the rest of this module lives in [batch_avss_avid]; the original
-//!    (pre-AVID) implementation is kept in [batch_avss].
+//! 2. A protocol to generate a batch of secret shared nonces for signing. This is implemented in
+//!    the [batch_avss_avid] module.
 //! 3. A presigning protocol to create presigning tuples from the secret shared nonces. This is
 //!    implemented in the [presigning] module. The presigning tuples can be created in advance of
 //!    knowing the message to be signed, and one tuple is consumed for each signature.
@@ -23,14 +22,17 @@
 //! encryption key pair (ECIES) and these public keys are known to all parties. These can be
 //! reused for all instances of the protocols.
 //!
+//! It is also assumed that all messages between parties are sent over authenticated channels, so
+//! that the receiver of a message knows who sent it and that it was not modified.
+//!
 //! The thresholds are defined as follows:
 //! * <i>W</i> = total weight of all parties
 //! * <i>f</i> = maximum Byzantine weight
 //! * <i>t</i> = threshold for signing
 //!
-//! For the weights used here, [Parameters::validate] checks the basic invariants `t < W` and
-//! `t &geq; f`. The AVID-based nonce protocol additionally requires `W > 2f` (enforced in
-//! `Avid::new`).
+//! For the weights used here, [Parameters::validate] checks the basic invariants `t < W`,
+//! `t &geq; f` and `t + f &leq; W`. The AVID-based nonce protocol additionally requires `W > 2f`
+//! (enforced in `Avid::new`).
 
 use crate::nodes::PartyId;
 use crate::random_oracle::RandomOracle;
@@ -46,16 +48,14 @@ use std::fmt::{Display, Formatter};
 
 mod avid;
 pub mod avss;
-pub mod batch_avss;
 pub mod batch_avss_avid;
 mod bcs;
-pub mod complaint;
 pub mod key_derivation;
 mod merkle;
 mod pascal_matrix;
 pub mod presigning;
 pub mod recovery_proof;
-pub mod reed_solomon;
+pub(crate) mod reed_solomon;
 pub mod signing;
 
 /// The group to use for the signing
@@ -82,12 +82,17 @@ pub struct Parameters {
 
 impl Parameters {
     /// Validate `(t, f)` against the given total weight `W`, checking the basic invariants needed
-    /// for the sharing here: `0 < f`, `t < W` and `t ≥ f`. Note the AVID-based nonce protocol has a
-    /// further requirement, `W > 2f`, which is enforced when its Reed-Solomon coder is built
-    /// (`Avid::new`), not here.
+    /// for the sharing here: `0 < f`, `t < W`, `t ≥ f` and `t + f ≤ W`. Note the AVID-based nonce
+    /// protocol has a further requirement, `W > 2f`, which is enforced when its Reed-Solomon coder
+    /// is built (`Avid::new`), not here.
     pub fn validate(&self, total_weight: u16) -> FastCryptoResult<()> {
         let Parameters { t, f } = *self;
-        if f == 0 || t == 0 || t >= total_weight || t < f {
+        if f == 0
+            || t == 0
+            || t >= total_weight
+            || t < f
+            || t as u32 + f as u32 > total_weight as u32
+        {
             return Err(InvalidInput);
         }
         Ok(())
@@ -156,10 +161,14 @@ mod tests {
     use crate::nodes::{Node, Nodes, PartyId};
     use crate::polynomial::{Eval, Poly};
     use crate::threshold_schnorr::batch_avss_avid::{ShareBatch, SharesForNode};
-    use crate::threshold_schnorr::key_derivation::derive_verifying_key;
+    use crate::threshold_schnorr::key_derivation::{
+        derive_verifying_key, derive_verifying_key_internal,
+    };
     use crate::threshold_schnorr::presigning::Presignatures;
-    use crate::threshold_schnorr::signing::{aggregate_signatures, generate_partial_signatures};
-    use crate::threshold_schnorr::{avss, batch_avss_avid as batch_avss, Parameters, EG, G, S};
+    use crate::threshold_schnorr::signing::{
+        aggregate_signatures, generate_partial_signatures, Blame,
+    };
+    use crate::threshold_schnorr::{avss, batch_avss_avid, Address, Parameters, EG, G, S};
     use crate::types::{get_uniform_value, IndexedValue, ShareIndex};
     use fastcrypto::groups::secp256k1::schnorr::SchnorrPublicKey;
     use fastcrypto::groups::{GroupElement, Scalar};
@@ -167,6 +176,7 @@ mod tests {
     use itertools::Itertools;
     use std::collections::HashMap;
     use std::hash::Hash;
+    /// A happy-path smoke test, not a reference for integrating the protocols.
     #[test]
     fn test_e2e() {
         // No complaints, all honest
@@ -280,7 +290,8 @@ mod tests {
         //
 
         // Generate a batch of nonces for each party's share
-        let mut presigning_outputs = HashMap::<PartyId, Vec<batch_avss::ReceiverOutput>>::new();
+        let mut presigning_outputs =
+            HashMap::<PartyId, Vec<batch_avss_avid::ReceiverOutput>>::new();
         nodes.node_ids_iter().for_each(|id| {
             presigning_outputs.insert(id, Vec::new());
         });
@@ -289,7 +300,7 @@ mod tests {
         for dealer_id in nodes.node_ids_iter() {
             let sid = format!("presig-test-session-{}", dealer_id).into_bytes();
             let params = Parameters { t, f };
-            let dealer: batch_avss::Dealer = batch_avss::Dealer::new(
+            let dealer: batch_avss_avid::Dealer = batch_avss_avid::Dealer::new(
                 nodes.clone(),
                 dealer_id,
                 params,
@@ -301,7 +312,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(id, enc_secret_key)| {
-                    batch_avss::Receiver::new(
+                    batch_avss_avid::Receiver::new(
                         nodes.clone(),
                         id as u16,
                         dealer_id,
@@ -328,21 +339,10 @@ mod tests {
         let mut presigs = presigning_outputs
             .into_iter()
             .map(|(id, outputs)| {
-                // Convert the AVID-based outputs into the original batch_avss types that
-                // presigning consumes; stamp each share with its share index from `share_ids_of`.
-                let indices = nodes.share_ids_of(id).unwrap();
                 (
                     id,
-                    Presignatures::new(
-                        outputs
-                            .into_iter()
-                            .map(|o| o.into_legacy(&indices))
-                            .collect(),
-                        batch_size_per_weight,
-                        Parameters { t, f },
-                        false,
-                    )
-                    .unwrap(),
+                    Presignatures::new(outputs, batch_size_per_weight, Parameters { t, f })
+                        .unwrap(),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -385,7 +385,7 @@ mod tests {
         .unwrap();
 
         // Aggregate partial signatures
-        let signature = aggregate_signatures(
+        let (signature, excluded) = aggregate_signatures(
             message,
             &public_presig,
             &beacon_value,
@@ -393,11 +393,12 @@ mod tests {
                 .iter()
                 .flat_map(|(_, s)| s.clone())
                 .collect_vec(),
-            t,
+            Parameters { t, f },
             &vk,
             None,
         )
         .unwrap();
+        assert_eq!(excluded, Blame::Nobody);
 
         // Check that this produced a valid signature
         SchnorrPublicKey::try_from(&vk)
@@ -564,7 +565,7 @@ mod tests {
         .unwrap();
 
         // Aggregate partial signatures
-        let signature_2 = aggregate_signatures(
+        let (signature_2, excluded) = aggregate_signatures(
             message_2,
             &public_presig,
             &beacon_value,
@@ -572,11 +573,12 @@ mod tests {
                 .iter()
                 .flat_map(|(_, s)| s.clone())
                 .collect_vec(),
-            t,
+            Parameters { t, f },
             &vk,
             None,
         )
         .unwrap();
+        assert_eq!(excluded, Blame::Nobody);
 
         // Check that this produced a valid signature
         SchnorrPublicKey::try_from(&vk)
@@ -649,7 +651,7 @@ mod tests {
             .map(|i| {
                 (0..n)
                     .map(|j| {
-                        batch_avss::ReceiverOutput {
+                        batch_avss_avid::ReceiverOutput {
                             my_shares: SharesForNode {
                                 shares: vec![ShareBatch {
                                     batch: (0..batch_size_per_weight as usize)
@@ -667,19 +669,8 @@ mod tests {
 
         let mut presigning = outputs
             .into_iter()
-            .enumerate()
-            .map(|(i, output)| {
-                let indices = [ShareIndex::new(i as u16 + 1).unwrap()];
-                Presignatures::new(
-                    output
-                        .into_iter()
-                        .map(|o| o.into_legacy(&indices))
-                        .collect(),
-                    batch_size_per_weight,
-                    Parameters { t, f },
-                    false,
-                )
-                .unwrap()
+            .map(|output| {
+                Presignatures::new(output, batch_size_per_weight, Parameters { t, f }).unwrap()
             })
             .collect_vec();
 
@@ -718,7 +709,7 @@ mod tests {
         )
         .unwrap();
 
-        let signature = aggregate_signatures(
+        let (signature, excluded) = aggregate_signatures(
             message,
             &public,
             &beacon_value,
@@ -726,17 +717,156 @@ mod tests {
                 .iter()
                 .flat_map(|(_, sigs)| sigs.clone())
                 .collect_vec(),
-            t,
+            Parameters { t, f },
             &vk_element,
             None,
         )
         .unwrap();
+        assert_eq!(excluded, Blame::Nobody);
 
         // Check that this produced a valid signature
         SchnorrPublicKey::try_from(&vk_element)
             .unwrap()
             .verify(message, &signature)
             .unwrap();
+
+        // A single invalid partial signature is corrected and its index reported.
+        let mut corrupted = partial_signatures
+            .iter()
+            .flat_map(|(_, sigs)| sigs.clone())
+            .collect_vec();
+        corrupted[0].value = S::rand(&mut rng);
+        let (corrected, excluded) = aggregate_signatures(
+            message,
+            &public,
+            &beacon_value,
+            &corrupted,
+            Parameters { t, f },
+            &vk_element,
+            None,
+        )
+        .unwrap();
+        assert_eq!(excluded, Blame::Certain(vec![corrupted[0].index]));
+        SchnorrPublicKey::try_from(&vk_element)
+            .unwrap()
+            .verify(message, &corrected)
+            .unwrap();
+
+        // Honest partial signatures with the wrong beacon here: the decoding rules them out as the
+        // cause, so this is reported as the inputs disagreeing rather than as a bad signature.
+        let honest = partial_signatures
+            .iter()
+            .flat_map(|(_, sigs)| sigs.clone())
+            .collect_vec();
+        assert!(matches!(
+            aggregate_signatures(
+                message,
+                &public,
+                &(beacon_value + S::generator()),
+                &honest,
+                Parameters { t, f },
+                &vk_element,
+                None,
+            ),
+            Err(fastcrypto::error::FastCryptoError::InconsistentInputs)
+        ));
+
+        // The same fault is still corrected from five partial signatures, but excluding it leaves
+        // four, short of the `t + f` the aggregation wants before it will name an index.
+        let (corrected, excluded) = aggregate_signatures(
+            message,
+            &public,
+            &beacon_value,
+            &corrupted[..5],
+            Parameters { t, f },
+            &vk_element,
+            None,
+        )
+        .unwrap();
+        assert_eq!(excluded, Blame::Inconclusive(vec![corrupted[0].index]));
+        SchnorrPublicKey::try_from(&vk_element)
+            .unwrap()
+            .verify(message, &corrected)
+            .unwrap();
+    }
+
+    /// Sign with every combination of the Y parities of the verifying key, the nonce R and the
+    /// derived verifying key, since each selects a different branch in the BIP-0340 adjustments.
+    #[test]
+    fn test_signing_all_parities() {
+        let (t, f, n) = (3u16, 2u16, 5u16);
+        let message = b"parity";
+        let mut rng = rand::thread_rng();
+        let has_even_y = |p: &G| p.has_even_y().unwrap();
+
+        for vk_even in [true, false] {
+            let sk = loop {
+                let sk = S::rand(&mut rng);
+                if has_even_y(&(G::generator() * sk)) == vk_even {
+                    break sk;
+                }
+            };
+            let vk = G::generator() * sk;
+            let sk_shares = mock_shares(&mut rng, sk, t, n);
+
+            // No derivation, and addresses whose derived verifying keys have even and odd Y.
+            let address_with = |derived_even: bool| -> Address {
+                (0u8..=255)
+                    .map(|i| [i; 32])
+                    .find(|a| {
+                        has_even_y(&derive_verifying_key_internal(&vk, a).unwrap()) == derived_even
+                    })
+                    .unwrap()
+            };
+            for address in [None, Some(address_with(true)), Some(address_with(false))] {
+                for nonce_even in [true, false] {
+                    let presig = S::rand(&mut rng);
+                    let public_presig = G::generator() * presig;
+                    let presig_shares = mock_shares(&mut rng, presig, t, n);
+                    let beacon = loop {
+                        let beacon = S::rand(&mut rng);
+                        if has_even_y(&(public_presig + G::generator() * beacon)) == nonce_even {
+                            break beacon;
+                        }
+                    };
+
+                    let partial_signatures = (0..n as usize)
+                        .flat_map(|i| {
+                            generate_partial_signatures(
+                                message,
+                                (vec![presig_shares[i].value], public_presig),
+                                &beacon,
+                                &avss::SharesForNode {
+                                    shares: vec![sk_shares[i].clone()],
+                                },
+                                &vk,
+                                address.as_ref(),
+                            )
+                            .unwrap()
+                            .1
+                        })
+                        .collect_vec();
+                    let (signature, excluded) = aggregate_signatures(
+                        message,
+                        &public_presig,
+                        &beacon,
+                        &partial_signatures,
+                        Parameters { t, f },
+                        &vk,
+                        address.as_ref(),
+                    )
+                    .unwrap();
+                    assert_eq!(excluded, Blame::Nobody);
+
+                    match address {
+                        Some(address) => derive_verifying_key(&vk, &address).unwrap(),
+                        None => SchnorrPublicKey::try_from(&vk).unwrap(),
+                    }
+                    .verify(message, &signature)
+                    .unwrap();
+                }
+            }
+        }
     }
 
     fn mock_shares(rng: &mut impl AllowedRng, secret: S, t: u16, n: u16) -> Vec<Eval<S>> {
@@ -786,7 +916,7 @@ mod tests {
             .map(|i| {
                 (0..n as usize)
                     .map(|j| {
-                        batch_avss::ReceiverOutput {
+                        batch_avss_avid::ReceiverOutput {
                             my_shares: SharesForNode {
                                 shares: vec![ShareBatch {
                                     batch: (0..batch_size_per_weight as usize)
@@ -804,19 +934,8 @@ mod tests {
 
         let mut presigning = outputs
             .into_iter()
-            .enumerate()
-            .map(|(i, output)| {
-                let indices = [ShareIndex::new(i as u16 + 1).unwrap()];
-                Presignatures::new(
-                    output
-                        .into_iter()
-                        .map(|o| o.into_legacy(&indices))
-                        .collect(),
-                    batch_size_per_weight,
-                    Parameters { t, f },
-                    false,
-                )
-                .unwrap()
+            .map(|output| {
+                Presignatures::new(output, batch_size_per_weight, Parameters { t, f }).unwrap()
             })
             .collect_vec();
 
@@ -855,7 +974,7 @@ mod tests {
         )
         .unwrap();
 
-        let signature = aggregate_signatures(
+        let (signature, excluded) = aggregate_signatures(
             message,
             &public,
             &beacon_value,
@@ -863,11 +982,12 @@ mod tests {
                 .iter()
                 .flat_map(|(_, sigs)| sigs.clone())
                 .collect_vec(),
-            t,
+            Parameters { t, f },
             &vk_element,
             Some(&address),
         )
         .unwrap();
+        assert_eq!(excluded, Blame::Nobody);
 
         // Check that this produced a valid signature
         derive_verifying_key(&vk_element, &address)

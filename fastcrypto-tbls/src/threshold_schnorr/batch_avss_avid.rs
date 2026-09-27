@@ -7,6 +7,12 @@
 //! weight `W` under a threshold `t`. The numbered steps below, starting at
 //! [Dealer::create_avss_messages], walk through the protocol.
 //!
+//! Nothing here bounds the size of a message, so a caller should reject an untrusted message that
+//! is larger than its own deployment admits before deserializing it. A message grows with the
+//! receiver's own weight and with the batch size, and a receiver whose message is rejected sees no
+//! message and so cannot complain. Note that a deserialized message can take up to about 30 times
+//! its serialized size in memory.
+//!
 //! In the first phase, the dealer sends an [AvssMessage] to each recipient. Receivers decrypt the
 //! ciphertext, verify the shares and vote on the message.
 //! The dealer collects the votes and forms a certificate.
@@ -75,10 +81,6 @@ pub struct Receiver {
     avid: avid::Avid,
 }
 
-/// An upper bound on the BCS-serialized size of an [AvssMessage], to be enforced when
-/// deserializing untrusted messages.
-pub const AVSS_MESSAGE_MAX_SIZE: usize = 500_000; // 500 KB.
-
 /// The dealer's per-recipient first phase message.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvssMessage {
@@ -128,10 +130,6 @@ pub struct AvidMessageBuilder<C: Certificate<Payload = AvssVote>> {
     inner: avid::DispersalBuilder,
     avss_cert: C,
 }
-
-/// An upper bound on the BCS-serialized size of an [AvidMessage] (excluding the cert `C`), to be
-/// enforced when deserializing untrusted messages.
-pub const AVID_MESSAGE_MAX_SIZE: usize = 500_000; // 500 KB, plus the cert.
 
 /// The dealer's per-receiver second phase message.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -204,42 +202,20 @@ pub struct ShareBatch {
     pub blinding_share: S,
 }
 
-// TODO: This can be removed when batch_avss is removed.
-impl ReceiverOutput {
-    /// Convert to the legacy [`crate::threshold_schnorr::batch_avss::ReceiverOutput`].
-    pub fn into_legacy(
-        self,
-        indices: &[ShareIndex],
-    ) -> crate::threshold_schnorr::batch_avss::ReceiverOutput {
-        use crate::threshold_schnorr::batch_avss as legacy;
-        legacy::ReceiverOutput {
-            my_shares: legacy::SharesForNode {
-                shares: self
-                    .my_shares
-                    .shares
-                    .into_iter()
-                    .zip(indices)
-                    .map(|(s, &index)| legacy::ShareBatch {
-                        index,
-                        batch: s.batch,
-                        blinding_share: s.blinding_share,
-                    })
-                    .collect(),
-            },
-            public_keys: self.public_keys,
-        }
-    }
-}
-
 impl Dealer {
     /// Create a new dealer.
     ///
     /// * `nodes` defines the set of receivers and their weights.
     /// * `dealer_id` is the id of this dealer as a node.
     /// * `params` carries the reconstruction thresholds.
-    /// * `sid` is a session identifier that should be unique for each invocation of a dealer, but
+    /// * `sid` is a session identifier that must be unique for each invocation of a dealer, but
     ///   the same for all parties in the same session.
-    /// * `batch_size_per_weight` is the number of secrets a dealer should deal per weight it has.
+    /// * `batch_size_per_weight` is the number of secrets a dealer must deal per weight it has.
+    ///
+    /// All arguments must be the same for the dealer and all receivers.
+    ///
+    /// Returns an `InvalidInput` error if the dealer has no nonces to deal because either its
+    /// weight or `batch_size_per_weight` is zero.
     pub fn new(
         nodes: Nodes<EG>,
         dealer_id: PartyId,
@@ -252,6 +228,9 @@ impl Dealer {
         let nodes = Arc::new(nodes);
         let avid = avid::Avid::new(Arc::clone(&nodes), params.f)?;
         let batch_size = nodes.weight_of(dealer_id)? as usize * batch_size_per_weight as usize;
+        if batch_size == 0 {
+            return Err(InvalidInput);
+        }
         Ok(Self {
             params,
             nodes,
@@ -392,9 +371,12 @@ impl Dealer {
     ///    complement of `avss_cert.signers()` within the node set.
     ///
     ///    This phase is only needed if any receiver failed to confirm in the first phase.
-    ///    If every receiver confirmed, the second phase can be skipped entirely.
+    ///    If every receiver confirmed, the second phase should be skipped entirely, and this returns
+    ///    an [InvalidInput] error.
     ///
-    ///    The caller should persist the returned [AvidMessageBuilder] before sending any messages.
+    ///    The [AvidMessageBuilder] cannot be persisted, so to survive a crash the caller should
+    ///    persist the AVSS certificate and rebuild the builder from it and the persisted
+    ///    [AvssMessageBuilder].
     pub fn create_avid_messages<C: Certificate<Payload = AvssVote>>(
         &self,
         avss_message_builder: &AvssMessageBuilder,
@@ -409,7 +391,8 @@ impl Dealer {
     // Step 6 happens at the caller level:
     //   6. Once `W-f` weight of [AvidVote]s has been collected, the dealer can form and
     //      publish a certificate over those votes on the TOB. This is done by the caller and
-    //      completes the dealer's role in the protocol.
+    //      completes the dealer's role in the protocol. Parties must only accept the first
+    //      certificate from each dealer per session and ignore later ones.
 
     /// Test-only variant of [Self::create_avid_messages] that runs `mutate_shards` over the
     /// per-recipient, per-disperser shards before they are committed, to simulate a cheating
@@ -429,8 +412,8 @@ impl Dealer {
 
     /// Validate the AVSS certificate against the builder's common message, derive the pending
     /// recipients (non-signers, capped at `f` weight), and collect their ciphertexts as the AVID
-    /// payloads. Returns [InvalidInput] if the cert binds a different common message or the pending
-    /// weight exceeds `f`.
+    /// payloads. Returns [InvalidInput] if the cert binds a different common message, or if there
+    /// are no pending recipients or their weight exceeds `f`.
     fn prepare_avid_payloads<C: Certificate<Payload = AvssVote>>(
         &self,
         avss_message_builder: &AvssMessageBuilder,
@@ -445,6 +428,10 @@ impl Dealer {
             .node_ids_iter()
             .filter(|id| !avss_cert.signers().contains(id))
             .collect();
+        if pending_recipients.is_empty() {
+            warn!("batch_avss prepare_avid_payloads: no pending recipients");
+            return Err(InvalidInput);
+        }
         if self.nodes.total_weight_of(pending_recipients.iter())? > self.params.f {
             warn!("batch_avss prepare_avid_payloads: too many pending recipients");
             return Err(InvalidInput);
@@ -467,11 +454,14 @@ impl Receiver {
     /// * `id` is the id of this receiver.
     /// * `dealer_id` is the id of the dealer.
     /// * `params` carries the reconstruction threshold `t` and Byzantine bound `f`.
-    /// * `sid` is a session identifier that should be unique for each invocation, but the same
-    ///   for all parties.
+    /// * `sid` is a session identifier that must be unique for each invocation of a dealer, but the
+    ///   same for all parties in the same session.
     /// * `enc_secret_key` is this Receivers' secret key for the distribution of nonces. The
     ///   corresponding public key is defined in `nodes`.
-    /// * `batch_size_per_weight` is the number of secrets a dealer should deal per weight it has.
+    /// * `batch_size_per_weight` is the number of secrets a dealer must deal per weight it has.
+    ///
+    /// All arguments except `id` and `enc_secret_key` must be the same for the dealer and all
+    /// receivers.
     ///
     /// Returns an `InvalidInput` error if the `id` or `dealer_id` is invalid, or if the dealer has
     /// no nonces to deal because either its weight or `batch_size_per_weight` is zero.
@@ -520,7 +510,9 @@ impl Receiver {
     ///    On any failure the receiver silently ignores the message and falls through to the second
     ///    phase.
     ///
-    ///    A voter should persist the returned outputs before sending its [AvssVote].
+    ///    The returned outputs cannot be persisted, so a voter should persist the [AvssMessage]
+    ///    before sending its [AvssVote] and process it again after a crash. It must vote for at
+    ///    most one common message per dealer per session.
     pub fn process_avss_message(
         &self,
         message: &AvssMessage,
@@ -548,16 +540,18 @@ impl Receiver {
     /// 5. Verify a second-phase [AvidMessage] and emit an [EchoBuilder] which can build
     ///    [Echo]es. Returns also an [AvidVote] to be signed and returned to the dealer.
     ///
-    ///    Only receivers that verified their shares and sent an [AvssVote] for this round should
-    ///    process [AvidMessage]s and sign [AvidVote]s. The caller must pass the
-    ///    [VerifiedAvssCommonMessage] it voted on.
+    ///    Only receivers that verified a common message for this round should process
+    ///    [AvidMessage]s and sign [AvidVote]s, whether or not their [AvssVote] reached the dealer
+    ///    in time. The caller must pass the [VerifiedAvssCommonMessage] it verified.
     ///
-    ///    Receivers who did not receive their shares through an [AvssMessage] (or voted on a
-    ///    different common message) are pending recipients: they should ignore [AvidMessage]s,
-    ///    wait for a published [Certificate] over [AvidVote]s, and then get the [AvssCommonMessage]
-    ///    and [Echo]es from the signers (see below).
+    ///    Receivers who did not receive their shares through an [AvssMessage] (or verified a
+    ///    different common message) are pending recipients: they wait for a published
+    ///    [Certificate] over [AvidVote]s, and then get the [AvssCommonMessage] and [Echo]es from
+    ///    the signers (see below).
     ///
-    ///    The caller should persist the outputs before sending its [AvidVote].
+    ///    The returned outputs cannot be persisted, so the caller should persist the [AvidMessage]
+    ///    before sending its [AvidVote] and process it again after a crash. It must vote for at
+    ///    most one dispersal per dealer per session.
     pub fn process_avid_message<C: Certificate<Payload = AvssVote>>(
         &self,
         verified_avss_common_message: &VerifiedAvssCommonMessage,
@@ -603,34 +597,36 @@ impl Receiver {
 
     /// 7a. Validate an [AvssCommonMessage] based on the cert, and return
     ///     [VerifiedAvssCommonMessage].
+    ///     Returns [NotEnoughWeight] if the signers of `avid_cert` have less than `W − f` weight.
     pub fn verify_common_message<C: Certificate<Payload = AvidVote>>(
         &self,
         avid_cert: &VerifiedCertificate<C>,
         common_message: AvssCommonMessage,
     ) -> FastCryptoResult<VerifiedAvssCommonMessage> {
-        let hash = common_message.hash();
-        if hash != avid_cert.payload().common_message_hash {
+        self.check_avid_cert_weight(avid_cert)?;
+        if common_message.hash() != avid_cert.payload().common_message_hash {
             warn!(
                 "batch_avss verify_common_message: common message does not match the certified hash"
             );
             return Err(InvalidMessage);
         }
-        let challenge =
-            compute_challenge_from_common_message(&self.random_oracle(), &common_message);
-        Ok(VerifiedAvssCommonMessage {
-            message: common_message,
-            challenge,
-            hash,
-        })
+        common_message.verify(
+            self.params.t,
+            self.batch_size,
+            self.nodes.num_nodes(),
+            &self.random_oracle(),
+        )
     }
 
     /// 7b. Validate an [Echo] addressed to this receiver.
+    ///     Returns [NotEnoughWeight] if the signers of `avid_cert` have less than `W − f` weight.
     pub fn verify_avid_echo_message<C: Certificate<Payload = AvidVote>>(
         &self,
         echo: Echo,
         sender: PartyId,
         avid_cert: &VerifiedCertificate<C>,
     ) -> FastCryptoResult<VerifiedEcho> {
+        self.check_avid_cert_weight(avid_cert)?;
         self.avid
             .verify_echo(echo, sender, &avid_cert.payload().vote, self.id)
     }
@@ -759,6 +755,8 @@ impl Receiver {
 
     /// 8b. Validate a [AvidComplaint] and respond with this party's own shares.
     ///     This is called only by a receiver that sent a vote for the common message.
+    ///     Returns [NotEnoughWeight] if the signers of `avid_cert` have less than `W − f` weight.
+    ///     This is non-trivial, so handle at most one complaint per accuser per dealing.
     pub fn handle_avid_complaint<C: Certificate<Payload = AvidVote>>(
         &self,
         blame: &AvidComplaint,
@@ -771,6 +769,11 @@ impl Receiver {
         if !self.nodes.is_valid_id(accuser_id) {
             warn!("batch_avss handle_avid_complaint: accuser_id is not valid: {accuser_id}");
             return Err(InvalidInput);
+        }
+        self.check_avid_cert_weight(avid_cert)?;
+        if avid_cert.payload().common_message_hash != verified_common.hash {
+            warn!("batch_avss handle_avid_complaint: AVID cert binds a different common message");
+            return Err(InvalidMessage);
         }
         self.avid
             .verify_complaint(blame, accuser_id, &avid_cert.payload().vote, |payload| {
@@ -841,7 +844,8 @@ impl Receiver {
         })
     }
 
-    /// 9b. Recover the accuser's own shares from a quorum of [VerifiedComplaintResponse]s.
+    /// 9b. Recover the accuser's own shares from a quorum of [VerifiedComplaintResponse]s. The
+    ///     caller must only pass responses that were verified against `verified_common`.
     pub fn recover(
         &self,
         verified_common: &VerifiedAvssCommonMessage,
@@ -875,14 +879,15 @@ impl Receiver {
 
         let my_shares = SharesForNode::recover(self, &response_shares)?;
 
-        // Each response was already checked by verify_complaint_response, and interpolating valid
-        // shares yields valid shares, so this final verification is defense-in-depth and should be
-        // unreachable as a failure. Warn loudly if it ever does fail, since that signals a logic
-        // error rather than a malicious input.
+        // Each response's ciphertext is pinned by hash in the common message, so its shares are the
+        // dealer's and cannot be altered by the responder. Interpolating shares that were verified
+        // against this common message yields valid shares, so this final verification is
+        // defense-in-depth. A failure means the responses were not all verified against this
+        // common message.
         my_shares
             .verify(verified_common, &self.my_indices(), self.batch_size)
             .tap_err(|e| {
-                warn!("batch_avss recover: recovered shares failed final verification, which should be unreachable with verified responses: {e:?}")
+                warn!("batch_avss recover: recovered shares failed final verification, so the responses were not all verified against this common message: {e:?}")
             })?;
 
         Ok(ReceiverOutput {
@@ -895,6 +900,25 @@ impl Receiver {
         self.nodes.share_ids_of(self.id).unwrap()
     }
 
+    /// Check that the signers of an AVID certificate have at least `W − f` weight, so at least
+    /// `W − 2f` honest weight endorsed the certified dispersal and common message.
+    fn check_avid_cert_weight<C: Certificate<Payload = AvidVote>>(
+        &self,
+        avid_cert: &VerifiedCertificate<C>,
+    ) -> FastCryptoResult<()> {
+        // `validate` ensures f <= t < W, so this cannot underflow.
+        let required_weight = self.nodes.total_weight() - self.params.f;
+        if self
+            .nodes
+            .total_weight_of(avid_cert.certificate().signers().iter())?
+            < required_weight
+        {
+            warn!("batch_avss check_avid_cert_weight: not enough signers");
+            return Err(NotEnoughWeight(required_weight as usize));
+        }
+        Ok(())
+    }
+
     fn random_oracle(&self) -> RandomOracle {
         random_oracle_from_sid(&self.sid)
     }
@@ -905,8 +929,11 @@ fn check_ciphertext_hash(
     party_id: PartyId,
     verified_common: &VerifiedAvssCommonMessage,
 ) -> FastCryptoResult<()> {
-    if Blake2b256::digest(ciphertext)
-        != verified_common.message.ciphertext_hashes[party_id as usize]
+    if verified_common
+        .message
+        .ciphertext_hashes
+        .get(party_id as usize)
+        .is_none_or(|hash| *hash != Blake2b256::digest(ciphertext))
     {
         return Err(GeneralOpaqueError);
     }
@@ -949,15 +976,17 @@ impl AvssCommonMessage {
         if t == 0
             || self.full_public_keys.len() != batch_size
             || self.response_polynomial.degree() + 1 != t as usize
+            || !self.response_polynomial.is_reduced()
             || self.ciphertext_hashes.len() != num_nodes
         {
             warn!(
-                "batch_avss AvssCommonMessage::verify: invalid sizes (t = {}, full_public_keys.len() = {}, expected {}; response_polynomial.degree() = {}, expected {}; ciphertext_hashes.len() = {}, expected {})",
+                "batch_avss AvssCommonMessage::verify: invalid sizes (t = {}, full_public_keys.len() = {}, expected {}; response_polynomial.degree() = {}, expected {}, is_reduced() = {}; ciphertext_hashes.len() = {}, expected {})",
                 t,
                 self.full_public_keys.len(),
                 batch_size,
                 self.response_polynomial.degree(),
                 t as usize - 1,
+                self.response_polynomial.is_reduced(),
                 self.ciphertext_hashes.len(),
                 num_nodes,
             );
@@ -1040,20 +1069,21 @@ impl SharesForNode {
     }
 
     /// Get all shares this node has for the i-th secret/nonce in the batch, paired with the
-    /// given share indices. Returns an [InvalidInput] error if `i` is larger than or equal to
-    /// the batch size of any of the shares.
+    /// given share indices. Returns an [InvalidInput] error if the number of indices does not match
+    /// the number of shares, or if `i` is larger than or equal to the batch size of any of the
+    /// shares.
     pub fn shares_for_secret<'a>(
         &'a self,
         indices: &'a [ShareIndex],
         i: usize,
     ) -> FastCryptoResult<impl Iterator<Item = Eval<S>> + 'a> {
-        if self.shares.iter().any(|s| i >= s.batch.len()) {
+        if indices.len() != self.shares.len() || self.shares.iter().any(|s| i >= s.batch.len()) {
             return Err(InvalidInput);
         }
         Ok(self
             .shares
             .iter()
-            .zip(indices)
+            .zip_eq(indices)
             .map(move |(s, &index)| Eval {
                 index,
                 value: s.batch[i],
@@ -1196,7 +1226,7 @@ mod tests {
     use crate::polynomial::{Eval, Poly};
     use crate::threshold_schnorr::{avid, batch_avss_avid as batch_avss, Certificate, EG};
     use crate::types::ShareIndex;
-    use fastcrypto::error::FastCryptoError::InvalidMessage;
+    use fastcrypto::error::FastCryptoError::{InvalidMessage, NotEnoughWeight};
     use fastcrypto::error::FastCryptoResult;
     use fastcrypto::traits::AllowedRng;
     use itertools::Itertools;
@@ -1478,6 +1508,44 @@ mod tests {
                 .unwrap();
             assert_valid(outcome);
         }
+
+        // A certificate whose signers have less than W - f weight is rejected everywhere.
+        let weak_cert = AvidCert {
+            signers: voters.iter().skip(1).copied().collect(),
+            vote: avid_votes[&voters[0]].clone(),
+        }
+        .to_verified()
+        .unwrap();
+        let required_weight = NotEnoughWeight((n - f) as usize);
+        let i = *pending.first().unwrap();
+        let r = &receivers[i as usize];
+        assert_eq!(
+            r.verify_common_message(&weak_cert, state.common.clone())
+                .err(),
+            Some(required_weight.clone())
+        );
+        let (&sender, em) = echo_sets.iter().next().unwrap();
+        assert_eq!(
+            r.verify_avid_echo_message(em[&i].clone(), sender, &weak_cert)
+                .err(),
+            Some(required_weight.clone())
+        );
+        let voter = &receivers[voters[0] as usize];
+        assert_eq!(
+            voter
+                .handle_avid_complaint(
+                    &super::AvidComplaint {
+                        shards: BTreeMap::new(),
+                    },
+                    i,
+                    &voter_commons[&voters[0]],
+                    &weak_cert,
+                    state.ciphertexts[voters[0] as usize].clone(),
+                    &mut rng,
+                )
+                .err(),
+            Some(required_weight)
+        );
     }
 
     #[test]
@@ -1748,7 +1816,7 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_weight_dealer_deals_nothing() {
+    fn test_zero_weight_dealer_is_rejected() {
         let params = Parameters { t: 3, f: 1 };
         let weights: Vec<u16> = vec![1, 0, 3, 4];
         let batch_size_per_weight = 3;
@@ -1775,21 +1843,7 @@ mod tests {
 
         let sid = b"zero weight dealer".to_vec();
 
-        let dealer = Dealer::new(
-            nodes.clone(),
-            dealer_id,
-            params,
-            sid.clone(),
-            batch_size_per_weight,
-        )
-        .unwrap();
-        assert_eq!(dealer.batch_size, 0);
-
-        let state = dealer.create_avss_messages(&mut rng).unwrap();
-        assert!(state.common.full_public_keys.is_empty());
-        assert!(nodes
-            .node_ids_iter()
-            .all(|id| state.message_for(id).is_some()));
+        assert!(Dealer::new(nodes, dealer_id, params, sid, batch_size_per_weight).is_err());
     }
 
     /// Build a uniform-weight Dealer and matching set of Receivers for tests.

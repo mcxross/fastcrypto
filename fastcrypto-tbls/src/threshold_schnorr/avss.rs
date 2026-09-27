@@ -24,6 +24,7 @@ use fastcrypto::error::FastCryptoError::{
 };
 use fastcrypto::error::{FastCryptoError, FastCryptoResult};
 use fastcrypto::groups::{GroupElement, MultiScalarMul, Scalar};
+use fastcrypto::serde_helpers::ToFromByteArray;
 use fastcrypto::traits::AllowedRng;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -47,11 +48,10 @@ pub struct Receiver {
     commitment: Option<G>, // Commitment to the secret being shared if any (used for key rotation).
 }
 
-/// An upper bound on the BCS-serialized size of a [Message], to be enforced when deserializing
-/// untrusted messages.
-pub const AVSS_MESSAGE_MAX_SIZE: usize = 250_000; // 250 KB. A total weight of 2500 measures ~170 KB.
-
 /// The message broadcast by the dealer, containing the encrypted shares and the public keys of the nonces.
+///
+/// The size of a message grows with the total weight and the threshold: at a total weight of 2500
+/// over 1000 nodes, it measures ~170 KB.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     feldman_commitment: Poly<G>,
@@ -212,7 +212,7 @@ impl Dealer {
     ///   For key rotation, this should be set to the previous round's secret.
     /// * `nodes`: The set of nodes (parties) participating in the protocol.
     /// * `params`: The threshold parameters.
-    /// * `sid`: A session identifier that should be unique for each invocation of the protocol, including for each dealer.
+    /// * `sid`: A session identifier that must be unique for each invocation of the protocol, including for each dealer.
     ///
     /// Returns an error if the parameters are invalid.
     pub fn new<R: AllowedRng>(
@@ -280,8 +280,9 @@ impl Receiver {
     /// * `nodes`: The set of nodes (parties) participating in the protocol.
     /// * `id`: The unique identifier of this receiver. Should match one of the party ids in `nodes`.
     /// * `params`: The threshold parameters.
-    /// * `sid`: A session identifier that should be unique for each invocation of the protocol but the same for all parties in a single invocation.
-    /// * `commitment`: An optional commitment to the secret being shared (used for key rotation).
+    /// * `sid`: A session identifier that must be unique for each invocation of the protocol, including for each dealer, but the same for all parties in a single invocation.
+    /// * `commitment`: A commitment to the secret being shared. Required for key rotation, where
+    ///   all receivers must use the same commitment for a given dealer.
     /// * `enc_secret_key`: The private key used to decrypt the shares sent to this receiver.
     ///
     /// Returns an error if the parameters are invalid.
@@ -313,8 +314,11 @@ impl Receiver {
     ///
     /// If this works, the receiver can store the shares and contribute a signature on the message to a certificate.
     ///
-    /// Returns an [InvalidMessage] error if the ciphertext cannot be verified, if the commitments are invalid or do not match the commitments from a previous round.
-    /// All honest receivers will reject such a message with the same error, and such a message should be ignored.
+    /// Returns an [InvalidMessage] error if the message is malformed. All honest receivers reject
+    /// such a message with the same error, and it should be ignored.
+    ///
+    /// Returns an [InvalidInput] error if the dealing does not match this receiver's `commitment`,
+    /// which is local state, so receivers given different commitments disagree.
     ///
     /// If the message is valid but contains invalid shares for this receiver, the call will succeed but will return a [Complaint].
     pub fn process_message<R: AllowedRng>(
@@ -331,12 +335,15 @@ impl Receiver {
     /// Verify and decrypt this receiver's shares.
     ///
     /// `Ok(Some)`: valid shares. `Ok(None)`: shares are invalid for this receiver;
-    /// call [`Self::create_complaint`] to build a broadcastable complaint. `Err`
-    /// ([InvalidMessage]): the message is malformed and should be ignored.
+    /// use [`Self::process_message`] to build a broadcastable complaint. `Err`
+    /// ([InvalidMessage]): the message is malformed and should be ignored. `Err` ([InvalidInput]):
+    /// the dealing does not match this receiver's `commitment`.
     pub fn verify_message(&self, message: &Message) -> FastCryptoResult<Option<AvssOutput>> {
-        if message.feldman_commitment.degree() + 1 != self.params.t as usize {
+        if message.feldman_commitment.degree() + 1 != self.params.t as usize
+            || !message.feldman_commitment.is_reduced()
+        {
             warn!(
-                "AVSS verify_message: invalid feldman commitment degree {} (expected {})",
+                "AVSS verify_message: invalid feldman commitment degree {} (expected {}) or zero-padded",
                 message.feldman_commitment.degree(),
                 self.params.t as usize - 1,
             );
@@ -349,7 +356,7 @@ impl Receiver {
                 warn!(
                     "AVSS verify_message: feldman commitment c0 does not match the expected commitment from a previous round"
                 );
-                return Err(InvalidMessage);
+                return Err(InvalidInput);
             }
         }
 
@@ -385,9 +392,10 @@ impl Receiver {
         }
     }
 
-    /// Build a complaint proving this receiver got invalid shares. Only meaningful
-    /// when [`Self::verify_message`] returned `Ok(None)`.
-    pub fn create_complaint<R: AllowedRng>(&self, message: &Message, rng: &mut R) -> Complaint {
+    /// Build a complaint proving this receiver got invalid shares. This reveals this receiver's
+    /// decryption key for the message, so it must only be called after [`Self::verify_message`]
+    /// returned `Ok(None)`.
+    fn create_complaint<R: AllowedRng>(&self, message: &Message, rng: &mut R) -> Complaint {
         Complaint {
             proof: RecoveryProof::create(
                 self.id,
@@ -453,13 +461,23 @@ impl Receiver {
 
     /// 5. Upon receiving enough verified responses to a complaint, the accuser can recover its shares.
     ///
-    ///    Returns an error if the responses do not come from distinct parties or if their combined weight is
-    ///    below the threshold `t`.
+    ///    Returns an error if the responses do not come from distinct parties, if their combined weight is
+    ///    below the threshold `t`, or if the dealing does not match this receiver's `commitment`. The
+    ///    caller must only pass responses that were verified against `message`.
     pub fn recover(
         &self,
         message: &Message,
         responses: Vec<VerifiedComplaintResponse>,
     ) -> FastCryptoResult<AvssOutput> {
+        if let Some(c) = &self.commitment {
+            if message.feldman_commitment.c0() != *c {
+                warn!(
+                    "AVSS recover: feldman commitment c0 does not match the expected commitment from a previous round"
+                );
+                return Err(InvalidInput);
+            }
+        }
+
         if !responses.iter().map(|r| r.responder_id).all_unique() {
             return Err(InvalidInput);
         }
@@ -474,13 +492,14 @@ impl Receiver {
         let valid_shares = responses.into_iter().map(|r| r.shares).collect_vec();
         let my_shares = SharesForNode::recover(self.my_indices(), self.params.t, &valid_shares)?;
 
-        // The recovered shares are interpolated from already-verified shares, so this should never
-        // fail; if it does, something is seriously wrong.
+        // Interpolating shares that were verified against this message yields valid shares, so
+        // this final verification is defense-in-depth. A failure means the responses were not all
+        // verified against this message.
         my_shares
             .verify(message, &self.my_indices(), self.id)
             .tap_err(|e| {
                 warn!(
-                    "AVSS recover: recovered shares failed verification, this should never happen: {e:?}"
+                    "AVSS recover: recovered shares failed verification, so the responses were not all verified against this message: {e:?}"
                 );
             })?;
 
@@ -516,8 +535,16 @@ impl DkOutput {
 
     /// Combine multiple AVSS outputs from different dealers into a single output by summing.
     /// Called by the app level with AVSS outputs that represent at least t of the weight. The set of outputs is determined based on the order of the messages on the TOB channel.
-    /// Panics if the given `DkOutput`s are not compatible (same weight, same indices, same number of commitments)
     /// Returns the combined output, including the joint verifying key
+    ///
+    /// The outputs are not verified again, so they must come from [Receiver::process_message] or
+    /// [Receiver::recover], with at most one per dealer.
+    ///
+    /// Returns a [NotEnoughWeight] error if the outputs hold less than `t` of the weight, and an
+    /// [InvalidInput] error if they are empty or do not all hold the same share indices. Outputs
+    /// committing to polynomials of different degrees are not rejected: the sum extends to the
+    /// longer one. Every output of [Receiver::process_message] has degree `t - 1`, which is checked
+    /// there.
     pub fn complete_dkg(
         t: u16,
         nodes: &Nodes<EG>,
@@ -534,6 +561,18 @@ impl DkOutput {
             return Err(InvalidInput);
         }
 
+        // Different dealings have different commitments with overwhelming probability, so equal
+        // ones mean either the same output twice or two dealers sharing a secret. Neither is
+        // unsafe, since the joint secret stays secret as long as one contributor is honest, but
+        // the first means the caller counted one contribution twice.
+        if !outputs
+            .iter()
+            .map(|o| o.feldman_commitment.c0().to_byte_array())
+            .all_unique()
+        {
+            warn!("AVSS complete_dkg: two outputs share a commitment");
+        }
+
         outputs
             .into_iter()
             .map(Ok)
@@ -546,10 +585,16 @@ impl DkOutput {
     /// This is used after key rotation where each party shares their shares from the previous round as the new secret.
     /// After collecting t such shares from different parties, new shares for the given indices can be created using this function.
     /// Called by the app level with at least t AVSS outputs. The set of outputs is determined based on the order of the messages on the TOB channel.
+    /// All parties must use the same outputs. Note that a matching verifying key does not show this,
+    /// since any t valid outputs give the same key.
     ///
     /// The `outputs` parameter is a list of `IndexedValue`, where each `value` is the output of an
     /// AVSS instance and the corresponding `index` indicates which share from the previous round
     /// the AVSS instance was sharing.
+    ///
+    /// Returns an [InputLengthWrong] error if the number of outputs is not exactly `t`, and an
+    /// [InvalidInput] error if they repeat a share index or do not all hold a share for every index
+    /// `my_id` owns.
     pub fn complete_key_rotation(
         t: u16,
         my_id: PartyId,
@@ -697,48 +742,6 @@ mod tests {
     use fastcrypto::traits::AllowedRng;
     use itertools::Itertools;
     use std::collections::HashMap;
-
-    #[test]
-    fn test_size_limits() {
-        // Worst case for total weight <= 2500: the maximum number of nodes (Nodes::MAX_NODES = 1000,
-        // which maximizes the per-recipient encryption overhead) summing to the maximum total weight
-        // 2500, with t as large as the parameters allow (which maximizes the feldman commitment of t
-        // group elements). We pick `t` as large as `t + 2f <= total_weight` allows.
-        let num_nodes = 1000usize;
-        let total_weight = 2500u16;
-        let params = Parameters {
-            t: total_weight - 2,
-            f: 1,
-        };
-
-        let mut rng = rand::thread_rng();
-        let sks = (0..num_nodes)
-            .map(|_| ecies_v1::PrivateKey::<EG>::new(&mut rng))
-            .collect::<Vec<_>>();
-        // 500 nodes of weight 3 and 500 of weight 2 sum to 2500.
-        let nodes = Nodes::new(
-            sks.iter()
-                .enumerate()
-                .map(|(i, sk)| Node {
-                    id: i as u16,
-                    pk: PublicKey::from_private_key(sk),
-                    weight: if i < 500 { 3 } else { 2 },
-                })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        assert_eq!(nodes.total_weight(), total_weight);
-
-        let dealer =
-            Dealer::new(None, nodes, params, b"size-limit-test".to_vec(), &mut rng).unwrap();
-        let message = dealer.create_message(&mut rng);
-        let size = bcs::to_bytes(&message).unwrap().len();
-        assert!(
-            size <= super::AVSS_MESSAGE_MAX_SIZE,
-            "AVSS message size {size} exceeds limit {}",
-            super::AVSS_MESSAGE_MAX_SIZE
-        );
-    }
 
     #[test]
     fn test_sharing() {
