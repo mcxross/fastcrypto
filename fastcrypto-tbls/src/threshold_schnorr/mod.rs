@@ -20,7 +20,9 @@
 //!
 //! For both the DKG and nonce generation protocols, it is assumed that each party has an
 //! encryption key pair (ECIES) and these public keys are known to all parties. These can be
-//! reused for all instances of the protocols.
+//! reused for all instances of the protocols. Session ids must be unique across all instances of
+//! all these protocols, not just within one, since the instances share these keys and derive
+//! their random oracles from the session id alone.
 //!
 //! It is also assumed that all messages between parties are sent over authenticated channels, so
 //! that the receiver of a message knows who sent it and that it was not modified.
@@ -31,8 +33,7 @@
 //! * <i>t</i> = threshold for signing
 //!
 //! For the weights used here, [Parameters::validate] checks the basic invariants `t < W`,
-//! `t &geq; f` and `t + f &leq; W`. The AVID-based nonce protocol additionally requires `W > 2f`
-//! (enforced in `Avid::new`).
+//! `t > f` and `t + f ≤ W`, which together imply `W > 2f`.
 
 use crate::nodes::PartyId;
 use crate::random_oracle::RandomOracle;
@@ -72,6 +73,13 @@ type EG = RistrettoPoint;
 pub type Address = [u8; 32];
 
 /// Threshold parameters for the AVSS protocols.
+///
+/// The values must satisfy `t > f`.
+///
+/// If the weights of the parties are reduced, the reduced weights and thresholds must come from
+/// [Nodes::knapsack_reduce](crate::nodes::Nodes::knapsack_reduce), which guarantees `t > f`. The
+/// other reductions in [Nodes](crate::nodes::Nodes) can return `t == f`, which
+/// [Parameters::validate] rejects.
 #[derive(Copy, Clone, Debug)]
 pub struct Parameters {
     /// Reconstruction threshold: `≥ t` valid shares (by weight) reconstruct a secret.
@@ -82,15 +90,13 @@ pub struct Parameters {
 
 impl Parameters {
     /// Validate `(t, f)` against the given total weight `W`, checking the basic invariants needed
-    /// for the sharing here: `0 < f`, `t < W`, `t ≥ f` and `t + f ≤ W`. Note the AVID-based nonce
-    /// protocol has a further requirement, `W > 2f`, which is enforced when its Reed-Solomon coder
-    /// is built (`Avid::new`), not here.
+    /// for the sharing here: `0 < f`, `t < W`, `t > f` and `t + f ≤ W`.
     pub fn validate(&self, total_weight: u16) -> FastCryptoResult<()> {
         let Parameters { t, f } = *self;
         if f == 0
             || t == 0
             || t >= total_weight
-            || t < f
+            || t <= f
             || t as u32 + f as u32 > total_weight as u32
         {
             return Err(InvalidInput);
@@ -170,12 +176,23 @@ mod tests {
     };
     use crate::threshold_schnorr::{avss, batch_avss_avid, Address, Parameters, EG, G, S};
     use crate::types::{get_uniform_value, IndexedValue, ShareIndex};
+    use fastcrypto::error::FastCryptoError::{InputTooShort, InvalidInput};
     use fastcrypto::groups::secp256k1::schnorr::SchnorrPublicKey;
     use fastcrypto::groups::{GroupElement, Scalar};
     use fastcrypto::traits::AllowedRng;
     use itertools::Itertools;
     use std::collections::HashMap;
     use std::hash::Hash;
+
+    #[test]
+    fn test_parameters_validate() {
+        assert!(Parameters { t: 3, f: 2 }.validate(5).is_ok());
+        // A sharing of degree `t - 1` is reconstructed by the permitted `f` shares once `f >= t`.
+        assert!(Parameters { t: 3, f: 3 }.validate(10).is_err());
+        // t + f > W, and it overflows u16.
+        assert!(Parameters { t: 40001, f: 40000 }.validate(65535).is_err());
+    }
+
     /// A happy-path smoke test, not a reference for integrating the protocols.
     #[test]
     fn test_e2e() {
@@ -770,6 +787,28 @@ mod tests {
             ),
             Err(fastcrypto::error::FastCryptoError::InconsistentInputs)
         ));
+
+        // Fewer than t partial signatures, or a repeated index, are rejected.
+        let aggregate = |partials: &[Eval<S>]| {
+            aggregate_signatures(
+                message,
+                &public,
+                &beacon_value,
+                partials,
+                Parameters { t, f },
+                &vk_element,
+                None,
+            )
+            .err()
+        };
+        assert_eq!(
+            aggregate(&honest[..t as usize - 1]),
+            Some(InputTooShort(t as usize))
+        );
+        assert_eq!(
+            aggregate(&[&honest[..], &honest[..1]].concat()),
+            Some(InvalidInput)
+        );
 
         // The same fault is still corrected from five partial signatures, but excluding it leaves
         // four, short of the `t + f` the aggregation wants before it will name an index.

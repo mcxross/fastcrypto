@@ -15,12 +15,29 @@
 //!
 //! In the first phase, the dealer sends an [AvssMessage] to each recipient. Receivers decrypt the
 //! ciphertext, verify the shares and vote on the message.
-//! The dealer collects the votes and forms a certificate.
-//! In the second phase, the dealer disperses messages to the remaining recipients using AVID.
-//! Receivers again check the dispersal and vote on the message. The dealer collects the votes and
-//! forms a certificate.
-//! Given the second certificate, receivers can ask signers to send their echoes or help recover
-//! their shares.
+//! The dealer collects the votes and forms a [Certificate] over [AvssVote]s. If it has the total
+//! weight `W`, every receiver has its shares, so this is the dealer's completion certificate, which
+//! it publishes on the TOB, and the second phase is skipped. Otherwise, the receivers that did not
+//! sign it are the pending recipients, who get their shares in the second phase, and the dealer
+//! sends the certificate along with the dispersal so receivers can check that it covers them.
+//!
+//! In the second phase, the dealer disperses the pending recipients' ciphertexts to all receivers
+//! using AVID. Receivers again check the dispersal and vote on the message. The dealer collects
+//! the votes and forms a [Certificate] over [AvidVote]s. Once it has weight at least `W - f`, this
+//! is the dealer's completion certificate, which it publishes on the TOB. Given it, pending
+//! recipients can ask its signers to send their echoes or help recover their shares.
+//!
+//! Receivers go through the certificates published on the TOB for a dealer in TOB order, and
+//! accept the first one that verifies and meets the weight above for its kind as the dealer's
+//! completion certificate. They ignore any certificate for that dealer after it, even a valid one.
+//!
+//! A dealer may send different common messages to different receivers, so a receiver's output
+//! from the first phase may not be for the certified one. Once it has accepted the completion
+//! certificate, a receiver compares the certificate's `common_message_hash` with the
+//! [AvssCommonMessage::hash] of the common message it verified, if any. If they match, it uses
+//! its output from the first phase. Otherwise, it discards that output and gets its shares like
+//! any other pending recipient, from the signers of the completion certificate (see
+//! [Receiver::verify_common_message]).
 
 use crate::ecies_v1::{
     Ciphertext, MultiRecipientEncryption, PrivateKey, RecoveryPackage, SharedComponents,
@@ -131,7 +148,8 @@ pub struct AvidMessageBuilder<C: Certificate<Payload = AvssVote>> {
     avss_cert: C,
 }
 
-/// The dealer's per-receiver second phase message.
+/// The dealer's per-receiver second phase message. It carries the AVSS certificate from the first
+/// phase, whose non-signers are the pending recipients that the dispersal must cover.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvidMessage<C: Certificate<Payload = AvssVote>> {
     pub dispersal: avid::Dispersal,
@@ -243,9 +261,11 @@ impl Dealer {
     /// 1. Build the [AvssMessageBuilder]. This encrypts the shares for every receiver and holds
     ///    everything the dealer needs to create the per-receiver [AvssMessage]s.
     ///
-    ///    The dealer must send all [AvssMessage]s until it has collected an AVID certificate, even
-    ///    after an AVSS certificate has been created (i.e., it is critical that a receiver receives
-    ///    an AVSS message before the AVID message).
+    ///    Until the dealer has a completion certificate (see the module documentation), every
+    ///    receiver must be able to get its [AvssMessage] no later than its [AvidMessage], since a
+    ///    receiver cannot process an [AvidMessage] without a verified common message. The dealer
+    ///    can, e.g., keep resending the [AvssMessage]s, or send each receiver's [AvssMessage]
+    ///    together with its [AvidMessage].
     ///
     ///    To survive a crash, the caller should persist the returned [AvssMessageBuilder] before
     ///    sending any messages.
@@ -360,19 +380,29 @@ impl Dealer {
         })
     }
 
-    // Step 3 happens at the caller level:
-    //   3. Collect votes from the signers to form an AVSS certificate. The more votes collected,
-    //      the more efficient is the second phase, thus the caller should collect t+f votes and
-    //      then wait for \delta time to collect more votes from stragglers (e.g., 2 seconds).
-
     /// 4. RS-encode and commit the pending recipients' ciphertexts via AVID, returning an
     ///    [AvidMessageBuilder] that can create per-receiver [AvidMessage]s. The pending recipients
     ///    are derived as the relative
     ///    complement of `avss_cert.signers()` within the node set.
     ///
+    ///    Before this, the dealer collects the [AvssVote]s from step 2 into `avss_cert` (step 3).
+    ///    It needs votes of weight at least `max(t + f, W - f)`:
+    ///    * `t + f`, so that signers of weight at least `t` are honest and can help pending
+    ///      recipients recover their shares. Receivers reject a certificate with less.
+    ///    * `W - f`, so that the pending recipients have weight at most `f`, which this requires.
+    ///      This bounds the cost of the second phase, which grows with the weight of the pending
+    ///      recipients, and an honest dealer always gets these votes eventually.
+    ///
+    ///    Neither bound implies the other, e.g., after weight reduction, but the honest parties
+    ///    reach both when the Byzantine weight is at most `f - δ`, where `δ` is the reduction's
+    ///    allowed liveness degradation (see
+    ///    [knapsack_weight_reduction](crate::knapsack_weight_reduction)). Since each extra vote
+    ///    makes the second phase cheaper, the dealer should then wait for Δ time to collect more
+    ///    votes from stragglers (e.g., 2 seconds).
+    ///
     ///    This phase is only needed if any receiver failed to confirm in the first phase.
     ///    If every receiver confirmed, the second phase should be skipped entirely, and this returns
-    ///    an [InvalidInput] error.
+    ///    an [InvalidInput] error. The AVSS certificate is then the dealer's completion certificate.
     ///
     ///    The [AvidMessageBuilder] cannot be persisted, so to survive a crash the caller should
     ///    persist the AVSS certificate and rebuild the builder from it and the persisted
@@ -391,8 +421,8 @@ impl Dealer {
     // Step 6 happens at the caller level:
     //   6. Once `W-f` weight of [AvidVote]s has been collected, the dealer can form and
     //      publish a certificate over those votes on the TOB. This is done by the caller and
-    //      completes the dealer's role in the protocol. Parties must only accept the first
-    //      certificate from each dealer per session and ignore later ones.
+    //      completes the dealer's role in the protocol. See the module documentation for which
+    //      certificate receivers accept.
 
     /// Test-only variant of [Self::create_avid_messages] that runs `mutate_shards` over the
     /// per-recipient, per-disperser shards before they are committed, to simulate a cheating
@@ -542,7 +572,9 @@ impl Receiver {
     ///
     ///    Only receivers that verified a common message for this round should process
     ///    [AvidMessage]s and sign [AvidVote]s, whether or not their [AvssVote] reached the dealer
-    ///    in time. The caller must pass the [VerifiedAvssCommonMessage] it verified.
+    ///    in time. The caller must pass the [VerifiedAvssCommonMessage] it verified. A receiver
+    ///    that gets an [AvidMessage] before it has verified a common message keeps it until its
+    ///    [AvssMessage] arrives (see [Dealer::create_avss_messages]), and then processes both.
     ///
     ///    Receivers who did not receive their shares through an [AvssMessage] (or verified a
     ///    different common message) are pending recipients: they wait for a published
@@ -590,11 +622,12 @@ impl Receiver {
     }
 
     // ---- Non happy path flows ----
-    //
-    // 7. A receiver that did not receive its shares through an [AvssMessage] should wait for a
-    //    (TOB) published [Certificate] over [AvidVote]s that confirms they are a pending
-    //    recipient, and then retrieve the [AvssCommonMessage] and [Echo]es from the signers.
 
+    /// 7. A pending recipient, i.e., a receiver that did not get its shares in the first phase,
+    ///    waits for the dealer's completion certificate on the TOB. This is a [Certificate] over
+    ///    [AvidVote]s that lists it among the recipients. It then gets the [AvssCommonMessage] and
+    ///    [Echo]es from the certificate's signers.
+    ///
     /// 7a. Validate an [AvssCommonMessage] based on the cert, and return
     ///     [VerifiedAvssCommonMessage].
     ///     Returns [NotEnoughWeight] if the signers of `avid_cert` have less than `W − f` weight.
@@ -719,6 +752,10 @@ impl Receiver {
     }
 
     /// 8. Handle a complaint from an accuser.
+    ///
+    /// `own_ciphertext` is this receiver's ciphertext from the [AvssMessage] it verified. A
+    /// receiver keeps its [AvssMessage] and [AvidMessage] to answer complaints and serve echoes
+    /// until the end of the epoch, after which no presignatures from the dealing are used.
     ///
     /// 8a. Validate a [AvssComplaint] and respond with this party's own shares. This is called
     ///     only by a receiver that sent a vote for the common message.
@@ -906,7 +943,7 @@ impl Receiver {
         &self,
         avid_cert: &VerifiedCertificate<C>,
     ) -> FastCryptoResult<()> {
-        // `validate` ensures f <= t < W, so this cannot underflow.
+        // `validate` ensures f < t < W, so this cannot underflow.
         let required_weight = self.nodes.total_weight() - self.params.f;
         if self
             .nodes
@@ -1224,10 +1261,11 @@ mod tests {
     use crate::ecies_v1::PublicKey;
     use crate::nodes::{Node, Nodes, PartyId};
     use crate::polynomial::{Eval, Poly};
-    use crate::threshold_schnorr::{avid, batch_avss_avid as batch_avss, Certificate, EG};
+    use crate::threshold_schnorr::{avid, batch_avss_avid as batch_avss, Certificate, EG, S};
     use crate::types::ShareIndex;
     use fastcrypto::error::FastCryptoError::{InvalidMessage, NotEnoughWeight};
     use fastcrypto::error::FastCryptoResult;
+    use fastcrypto::groups::GroupElement;
     use fastcrypto::traits::AllowedRng;
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
@@ -1372,10 +1410,9 @@ mod tests {
     fn test_optimistic_then_pessimistic() {
         // 7 of 10 parties confirm in the optimistic phase; the remaining 3 receive their shares
         // via the pessimistic AVID phase, gated on the optimistic certificate. Pending weight
-        // (= 3) must be at most `f` so the dealer-side precheck in
-        // `create_avid_messages_with_mutation` accepts the cert; here it sits exactly at the
-        // `f = 3` boundary.
-        let t = 3;
+        // (= 3) must be at most `f` so the dealer-side precheck in `prepare_avid_payloads` accepts
+        // the cert; here it sits exactly at the `f = 3` boundary.
+        let t = 4;
         let f = 3;
         let n = 10u16;
         let batch_size_per_weight = 3;
@@ -1456,6 +1493,26 @@ mod tests {
         // Pessimistic phase: dispersal for the complement of voters (I = {7, 8, 9}). The dealer
         // bundles each dispersal with the cert into an [AvidMessage].
         let messages = dealer.create_avid_messages(&state, cert.clone()).unwrap();
+
+        // A response polynomial padded with a zero coefficient is rejected.
+        let mut padded = state.message_for(0).unwrap();
+        let mut coefficients = padded.common.response_polynomial.to_vec();
+        coefficients.push(S::zero());
+        padded.common.response_polynomial = Poly::from(coefficients);
+        assert_eq!(
+            receivers[0].process_avss_message(&padded).err(),
+            Some(InvalidMessage)
+        );
+
+        // An AVSS certificate with less than t + f weight is rejected.
+        let mut weak = messages.message_for(voters[0]).unwrap();
+        weak.avss_cert.voters = BTreeSet::from([voters[0]]);
+        assert_eq!(
+            receivers[voters[0] as usize]
+                .process_avid_message(&voter_commons[&voters[0]], weak)
+                .err(),
+            Some(NotEnoughWeight((t + f) as usize))
+        );
 
         // The voters (who verified their shares in the optimistic phase) process the
         // AvidMessages using the VerifiedAvssCommonMessage they retained, emit their echoes for

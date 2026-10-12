@@ -22,6 +22,7 @@ sha3 = "0.10.6"
 digest = "0.10.6"
 bcs = "0.1.4"
 tracing = "0.1.37"
+itertools = "0.12.0"
 
 # Aptos batch encryption is consensus-facing and must use the same Arkworks 0.5 fork as
 # Aptos Core. The fork changes hash-to-field output, so upstream Arkworks is not wire-compatible.

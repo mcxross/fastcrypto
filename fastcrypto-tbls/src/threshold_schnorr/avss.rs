@@ -9,6 +9,17 @@
 //! * The public keys along with the weights of each receiver are known to all parties and defined in the [Nodes] structure.
 //!
 //! See [Dealer] and [Receiver] below for the protocol steps.
+//!
+//! # Key rotation
+//!
+//! To reshare the key of a previous round with output `old` and threshold `t_old`:
+//! * Each old dealer runs one instance per share index `i` it holds, with its own sid and
+//!   `old.share_for_index(i)` as the secret.
+//! * Every receiver of that instance uses the public `old.commitment_for_index(i)` as its
+//!   `commitment`.
+//! * Each party passes exactly `t_old` of the outputs, each indexed by its `i`, to
+//!   [DkOutput::complete_key_rotation] with threshold `t_old`, and checks that the new `vk` is the
+//!   old one.
 
 use crate::ecies_v1::{MultiRecipientEncryption, PrivateKey};
 use crate::nodes::{Nodes, PartyId};
@@ -51,7 +62,9 @@ pub struct Receiver {
 /// The message broadcast by the dealer, containing the encrypted shares and the public keys of the nonces.
 ///
 /// The size of a message grows with the total weight and the threshold: at a total weight of 2500
-/// over 1000 nodes, it measures ~170 KB.
+/// over 1000 nodes, it measures ~170 KB. Nothing here bounds the size of a message, so a caller
+/// should reject an untrusted message that is larger than its own deployment admits before
+/// deserializing it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     feldman_commitment: Poly<G>,
@@ -209,7 +222,7 @@ impl BCSSerialized for SharesForNode {}
 impl Dealer {
     /// Create a new dealer.
     /// * `secret`: The secret to share. If None, a random secret is sampled from `rng`.
-    ///   For key rotation, this should be set to the previous round's secret.
+    ///   For key rotation, see the module documentation.
     /// * `nodes`: The set of nodes (parties) participating in the protocol.
     /// * `params`: The threshold parameters.
     /// * `sid`: A session identifier that must be unique for each invocation of the protocol, including for each dealer.
@@ -233,8 +246,17 @@ impl Dealer {
 
     /// 1. The Dealer generates shares and creates a message containing the encrypted shares.
     ///
-    ///    That message is broadcast to all receivers by the caller. Receivers process it to decrypt and verify their shares (see below),
-    ///    and contribute a signature on the message to a certificate. The dealer posts the certificate to the TOB channel.
+    ///    That message is broadcast to all receivers by the caller. Receivers process it to decrypt
+    ///    and verify their shares (see [Receiver::process_message]), and sign it if their shares
+    ///    are valid. Once the dealer has signatures from receivers of total weight at least
+    ///    `t + f`, it forms a certificate and posts it on the TOB. Then signers of weight at least
+    ///    `t` are honest and hold valid shares, so they can help others recover their shares.
+    ///    Nothing here checks the weight of a certificate, so receivers must check it before
+    ///    accepting a certificate. Receivers only accept the first certificate from each dealer, in
+    ///    TOB order.
+    ///
+    ///    The caller should persist the message before sending it, and resend the same message
+    ///    after a crash.
     pub fn create_message<Rng: AllowedRng>(&self, rng: &mut Rng) -> Message {
         let polynomial = Poly::rand_fixed_c0(self.params.t - 1, self.secret, rng);
         let all_shares = polynomial.eval_range(self.nodes.total_weight());
@@ -281,8 +303,8 @@ impl Receiver {
     /// * `id`: The unique identifier of this receiver. Should match one of the party ids in `nodes`.
     /// * `params`: The threshold parameters.
     /// * `sid`: A session identifier that must be unique for each invocation of the protocol, including for each dealer, but the same for all parties in a single invocation.
-    /// * `commitment`: A commitment to the secret being shared. Required for key rotation, where
-    ///   all receivers must use the same commitment for a given dealer.
+    /// * `commitment`: A commitment to the secret being shared. Required for key rotation (see
+    ///   the module documentation).
     /// * `enc_secret_key`: The private key used to decrypt the shares sent to this receiver.
     ///
     /// Returns an error if the parameters are invalid.
@@ -312,13 +334,23 @@ impl Receiver {
 
     /// 2. A receiver processes the message, verifies and decrypts its shares.
     ///
-    /// If this works, the receiver can store the shares and contribute a signature on the message to a certificate.
+    /// If this returns [ProcessedMessage::Valid], the receiver stores the shares and signs the
+    /// message for the dealer's certificate. If it returns a [ProcessedMessage::Complaint], the
+    /// receiver does not sign. Instead, it waits for a certificate for this message on the TOB
+    /// and then broadcasts the complaint, so that the signers can respond (see
+    /// [Self::handle_complaint]).
+    ///
+    /// A receiver signs at most one message per dealer and persists it, with its output, before
+    /// signing.
     ///
     /// Returns an [InvalidMessage] error if the message is malformed. All honest receivers reject
     /// such a message with the same error, and it should be ignored.
     ///
-    /// Returns an [InvalidInput] error if the dealing does not match this receiver's `commitment`,
-    /// which is local state, so receivers given different commitments disagree.
+    /// Returns an [InvalidInput] error if the dealing does not match this receiver's `commitment`.
+    /// If all receivers use the public commitment from the previous round, as in key rotation (see
+    /// the module documentation), this means the dealer shares a different secret, and the
+    /// message should be ignored like an [InvalidMessage] one. Otherwise, it may instead mean
+    /// that this receiver was given a different `commitment` than the others.
     ///
     /// If the message is valid but contains invalid shares for this receiver, the call will succeed but will return a [Complaint].
     pub fn process_message<R: AllowedRng>(
@@ -407,14 +439,18 @@ impl Receiver {
         }
     }
 
-    // The following steps happen at the caller level, before a receiver handles complaints:
-    //   3. Once t+f signatures have been collected in the certificate, the receivers can finish
-    //      the distribution phase of the protocol.
-    //      Then, upon seeing a certificate for a message for which it got a complaint, a receiver
-    //      broadcasts its complaint.
-
-    /// 4. Upon receiving a complaint, a receiver verifies it and responds with its shares.
+    /// 3. Upon receiving a complaint, a receiver verifies it and responds with its shares.
     ///    `accuser_id` is the party that raised the complaint (tracked by the caller).
+    ///
+    ///    To answer complaints, a receiver keeps the dealer's [Message] and its [AvssOutput] for
+    ///    every dealer in the set used in [DkOutput::complete_dkg] or
+    ///    [DkOutput::complete_key_rotation], persisted so that they survive a restart, until the
+    ///    end of the epoch.
+    ///
+    ///    Returns an [InvalidProof](FastCryptoError::InvalidProof) error if the complaint is invalid,
+    ///    and an [InvalidInput] error if the inputs are inconsistent: `accuser_id` is unknown,
+    ///    `message` was not validated, or `my_output` is not the output for `message`. The latter
+    ///    indicates a bug in the caller.
     pub fn handle_complaint(
         &self,
         message: &Message,
@@ -422,6 +458,12 @@ impl Receiver {
         complaint: &Complaint,
         my_output: &AvssOutput,
     ) -> FastCryptoResult<ComplaintResponse> {
+        // Responding with the output for another dealing would reveal this receiver's shares of
+        // that dealing.
+        if my_output.feldman_commitment != message.feldman_commitment {
+            warn!("AVSS handle_complaint: the output is not for this message");
+            return Err(InvalidInput);
+        }
         let accuser_share_ids = self.nodes.share_ids_of(accuser_id)?;
         complaint.proof.check(
             accuser_id,
@@ -459,7 +501,7 @@ impl Receiver {
         })
     }
 
-    /// 5. Upon receiving enough verified responses to a complaint, the accuser can recover its shares.
+    /// 4. Upon receiving enough verified responses to a complaint, the accuser can recover its shares.
     ///
     ///    Returns an error if the responses do not come from distinct parties, if their combined weight is
     ///    below the threshold `t`, or if the dealing does not match this receiver's `commitment`. The
@@ -534,7 +576,9 @@ impl DkOutput {
     }
 
     /// Combine multiple AVSS outputs from different dealers into a single output by summing.
-    /// Called by the app level with AVSS outputs that represent at least t of the weight. The set of outputs is determined based on the order of the messages on the TOB channel.
+    /// Called by the app level with AVSS outputs that represent at least t of the weight. All
+    /// parties must use the outputs of the same certified dealers, e.g., the first ones on the TOB
+    /// until their weight reaches `t`.
     /// Returns the combined output, including the joint verifying key
     ///
     /// The outputs are not verified again, so they must come from [Receiver::process_message] or
@@ -737,6 +781,7 @@ mod tests {
     use crate::threshold_schnorr::Extensions::Encryption;
     use crate::threshold_schnorr::{Parameters, EG, G};
     use crate::types::{IndexedValue, ShareIndex};
+    use fastcrypto::error::FastCryptoError::{InvalidInput, InvalidMessage};
     use fastcrypto::error::FastCryptoResult;
     use fastcrypto::groups::{GroupElement, Scalar};
     use fastcrypto::traits::AllowedRng;
@@ -809,6 +854,16 @@ mod tests {
         let recovered = Poly::recover_c0(t, shares.iter().take(t as usize)).unwrap();
 
         assert_eq!(secret, recovered);
+
+        // A commitment padded with a zero coefficient is rejected.
+        let mut padded = message.clone();
+        let mut coefficients = padded.feldman_commitment.to_vec();
+        coefficients.push(G::zero());
+        padded.feldman_commitment = Poly::from(coefficients);
+        assert_eq!(
+            receivers[0].verify_message(&padded).err(),
+            Some(InvalidMessage)
+        );
     }
 
     #[test]
@@ -999,6 +1054,18 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         let accuser_id = receivers[0].id;
+
+        // A receiver refuses to respond with its output for another dealing.
+        let other_output = assert_valid(
+            receivers[1]
+                .process_message(&dealer.create_message(&mut rng), &mut rng)
+                .unwrap(),
+        );
+        assert!(matches!(
+            receivers[1].handle_complaint(&message, accuser_id, &complaint, &other_output),
+            Err(InvalidInput)
+        ));
+
         let responses = receivers
             .iter()
             .skip(1)
