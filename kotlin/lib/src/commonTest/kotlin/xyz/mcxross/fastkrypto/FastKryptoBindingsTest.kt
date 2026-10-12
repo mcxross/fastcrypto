@@ -106,6 +106,39 @@ class FastKryptoBindingsTest {
   }
 
   @Test
+  fun secp256k1Keccak256RecoverableMatchesEip712Vector() {
+    // The Mail example from EIP-712.
+    val privateKey = keccak256("cow".encodeToByteArray())
+    val message =
+      ("1901f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f" +
+          "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e")
+        .hexToBytes()
+    val signature = secp256k1SignRecoverableKeccak256(privateKey, message)
+    assertTrue(
+      signature.contentEquals(
+        ("4355c47d63924e8a72e509b65029052eb6c299d53a04e167c5775fd466751c9d" +
+            "07299936d304c153f6443dfa05f40ff007d72911b6f72307f996231605b91562" +
+            "01")
+          .hexToBytes()
+      )
+    )
+    val publicKey = secp256k1RecoverPublicKeyKeccak256(message, signature)
+    assertTrue(publicKey.contentEquals(secp256k1PublicKeyUncompressed(privateKey)))
+    assertTrue(
+      keccak256(publicKey.copyOfRange(1, 65))
+        .copyOfRange(12, 32)
+        .contentEquals("cd2a3d9f938e13cd947ec05abc7fe734df8dd826".hexToBytes())
+    )
+    assertFalse(secp256k1SignRecoverable(privateKey, message).contentEquals(signature))
+    assertFailsWith<FastCryptoFfiException> {
+      secp256k1SignRecoverableKeccak256(ByteArray(31), message)
+    }
+    assertFailsWith<FastCryptoFfiException> {
+      secp256k1RecoverPublicKeyKeccak256(message, signature.copyOf(64))
+    }
+  }
+
+  @Test
   fun secp256r1KeypairSignVerifyRoundtrip() {
     val keypair = secp256r1GenerateKeypair()
     val message = "fastkrypto".encodeToByteArray()

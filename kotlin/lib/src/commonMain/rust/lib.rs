@@ -556,6 +556,35 @@ pub fn secp256k1_recover_public_key(
     Ok(pk.as_ref().to_vec())
 }
 
+/// Signs the Keccak-256 of `message`, as Ethereum's EIP-191 and EIP-712 expect; for EIP-712, pass
+/// `0x19 0x01 ‖ domainSeparator ‖ hashStruct(message)`. Returns `r ‖ s ‖ recovery id`, where the
+/// recovery id is 0 or 1 (Ethereum's `v` is 27 plus it). [`secp256k1_sign_recoverable`] uses SHA-256.
+#[uniffi::export]
+pub fn secp256k1_sign_recoverable_keccak256(
+    private_key: Vec<u8>,
+    message: Vec<u8>,
+) -> Result<Vec<u8>, FastCryptoFfiError> {
+    ensure_len(private_key.len(), SECP256K1_PRIVATE_KEY_LENGTH)?;
+    let mut private_key = private_key;
+    let kp = Secp256k1KeyPair::from_bytes(&private_key)?;
+    let sig = kp.sign_recoverable_with_hash::<Keccak256>(&message);
+    private_key.zeroize();
+    Ok(sig.as_ref().to_vec())
+}
+
+/// The 65-byte uncompressed key that made `signature` over the Keccak-256 of `message`, the form an
+/// Ethereum address is derived from.
+#[uniffi::export]
+pub fn secp256k1_recover_public_key_keccak256(
+    message: Vec<u8>,
+    signature: Vec<u8>,
+) -> Result<Vec<u8>, FastCryptoFfiError> {
+    ensure_len(signature.len(), SECP256K1_RECOVERABLE_SIGNATURE_SIZE)?;
+    let sig = Secp256k1RecoverableSignature::from_bytes(&signature)?;
+    let pk = sig.recover_with_hash::<Keccak256>(&message)?;
+    Ok(pk.pubkey.serialize_uncompressed().to_vec())
+}
+
 #[uniffi::export]
 pub fn secp256r1_generate_keypair() -> KeyPairBytes {
     let kp = Secp256r1KeyPair::generate(&mut thread_rng());
@@ -795,6 +824,57 @@ mod tests {
         let compressed = secp256k1_public_key_from_private(private_key).unwrap();
         assert!(secp256k1_verify_sha3_256(compressed, message.clone(), signature.clone()).unwrap());
         assert!(!secp256k1_verify_sha3_256(public_key, b"other".to_vec(), signature).unwrap());
+    }
+
+    #[test]
+    fn secp256k1_keccak256_recoverable_matches_eip712_vector() {
+        // The Mail example from EIP-712: the key is keccak256("cow") and the message is
+        // 0x1901 ‖ domainSeparator ‖ hashStruct(mail).
+        let private_key = keccak256(b"cow".to_vec());
+        let message = hex::decode("1901f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090fc52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e").unwrap();
+        assert_eq!(
+            hex::encode(keccak256(message.clone())),
+            "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2"
+        );
+        // The spec's r and s, then recovery id 1 (v = 28).
+        let signature =
+            secp256k1_sign_recoverable_keccak256(private_key.clone(), message.clone()).unwrap();
+        assert_eq!(hex::encode(&signature), "4355c47d63924e8a72e509b65029052eb6c299d53a04e167c5775fd466751c9d07299936d304c153f6443dfa05f40ff007d72911b6f72307f996231605b9156201");
+        let public_key =
+            secp256k1_recover_public_key_keccak256(message.clone(), signature.clone()).unwrap();
+        assert_eq!(
+            public_key,
+            secp256k1_public_key_uncompressed(private_key.clone()).unwrap()
+        );
+        assert_eq!(
+            hex::encode(&keccak256(public_key[1..].to_vec())[12..]),
+            "cd2a3d9f938e13cd947ec05abc7fe734df8dd826"
+        );
+        // Another message doesn't recover the signer; the SHA-256 signer signs another digest.
+        assert_ne!(
+            secp256k1_recover_public_key_keccak256(b"other".to_vec(), signature.clone()).ok(),
+            Some(public_key)
+        );
+        assert_ne!(
+            secp256k1_sign_recoverable(private_key, message.clone()).unwrap(),
+            signature
+        );
+    }
+
+    #[test]
+    fn secp256k1_keccak256_recoverable_rejects_malformed_input() {
+        let message = b"fastcrypto".to_vec();
+        assert!(secp256k1_sign_recoverable_keccak256(vec![0x11; 31], message.clone()).is_err());
+        assert!(secp256k1_sign_recoverable_keccak256(vec![0x00; 32], message.clone()).is_err());
+        let signature =
+            secp256k1_sign_recoverable_keccak256(vec![0x11; 32], message.clone()).unwrap();
+        assert!(
+            secp256k1_recover_public_key_keccak256(message.clone(), signature[..64].to_vec())
+                .is_err()
+        );
+        let mut bad_recovery_id = signature.clone();
+        bad_recovery_id[64] = 4;
+        assert!(secp256k1_recover_public_key_keccak256(message, bad_recovery_id).is_err());
     }
 
     #[test]
